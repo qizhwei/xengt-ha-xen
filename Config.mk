@@ -242,12 +242,12 @@ endif
 
 ifeq ($(GIT_HTTP),y)
 OVMF_UPSTREAM_URL ?= http://xenbits.xen.org/git-http/ovmf.git
-QEMU_UPSTREAM_URL ?= http://xenbits.xen.org/git-http/qemu-upstream-4.5-testing.git
+QEMU_UPSTREAM_URL ?= $(XEN_ROOT)/tools/qemu-xen
 QEMU_TRADITIONAL_URL ?= http://xenbits.xen.org/git-http/qemu-xen-4.5-testing.git
 SEABIOS_UPSTREAM_URL ?= http://xenbits.xen.org/git-http/seabios.git
 else
 OVMF_UPSTREAM_URL ?= git://xenbits.xen.org/ovmf.git
-QEMU_UPSTREAM_URL ?= http://xenbits.xen.org/git-http/qemu-upstream-4.5-testing.git
+QEMU_UPSTREAM_URL ?= $(XEN_ROOT)/tools/qemu-xen
 QEMU_TRADITIONAL_URL ?= git://xenbits.xen.org/qemu-xen-4.5-testing.git
 SEABIOS_UPSTREAM_URL ?= git://xenbits.xen.org/seabios.git
 endif
