@@ -41,6 +41,7 @@
 #include "libxl_json.h"
 #include "libxlutil.h"
 #include "xl.h"
+#include "../libxc/xc_private.h"
 
 /* For calls which return an errno on failure */
 #define CHK_ERRNOVAL( call ) ({                                         \
@@ -3712,6 +3713,9 @@ static int save_domain(uint32_t domid, const char *filename, int checkpoint,
     int fd;
     uint8_t *config_data;
     int config_len;
+    int vgt_ha_fd = -1;
+    char vgt_ha_cp_file[256];
+    int is_vgt = 0;
 
     save_domain_core_begin(domid, override_config_file,
                            &config_data, &config_len);
@@ -3728,14 +3732,33 @@ static int save_domain(uint32_t domid, const char *filename, int checkpoint,
 
     save_domain_core_writeconfig(fd, filename, config_data, config_len);
 
+    sprintf(vgt_ha_cp_file, "/sys/kernel/debug/vgt/vm%u/ha_checkpoint", domid);
+    vgt_ha_fd = open(vgt_ha_cp_file, O_RDWR);
+    if (vgt_ha_fd == -1) {
+        fprintf(stderr, "Can't open vgt ha file: %s\n", strerror(errno));
+        is_vgt = 0;
+    }
+    else {
+        fprintf(stderr, "open vgt ha file: %s %s\n", strerror(errno), __TIME__);
+        is_vgt = 1;
+    }
+
     int rc = libxl_domain_suspend(ctx, domid, fd, 0, NULL);
     close(fd);
+    fprintf(stderr, "XXH: %s libxl_domain_suspend end %s\n", __func__, __TIME__);
 
     if (rc < 0) {
         fprintf(stderr, "Failed to save domain, resuming domain\n");
         libxl_domain_resume(ctx, domid, 1, 0);
     }
     else if (leavepaused || checkpoint) {
+        if (is_vgt) {
+            char *vgt_ha_cmd = "ioreq_server_enable";
+            fprintf(stderr, "XXH: enable ioreq_server\n");
+	    if (write_exact(vgt_ha_fd, vgt_ha_cmd, sizeof(vgt_ha_cmd))) {
+	        fprintf(stderr, "XXH: write vgt ha file: %s\n", strerror(errno));
+            }
+        }
         if (leavepaused)
             libxl_domain_pause(ctx, domid);
         libxl_domain_resume(ctx, domid, 1, 0);

@@ -263,6 +263,8 @@ static int setup_guest(xc_interface *xch,
     xen_pfn_t special_array[NR_SPECIAL_PAGES];
     xen_pfn_t ioreq_server_array[NR_IOREQ_SERVER_PAGES];
 
+    fprintf(stderr, "XXH: %s() start.\n", __func__);
+
     if ( nr_pages > target_pages )
         pod_mode = XENMEMF_populate_on_demand;
 
@@ -509,6 +511,7 @@ static int setup_guest(xc_interface *xch,
     for ( i = 0; i < NR_IOREQ_SERVER_PAGES; i++ )
         ioreq_server_array[i] = ioreq_server_pfn(i);
 
+    fprintf(stderr, "XXH: hvm_build_x86 alloc & clear ioreq server pages.\n");
     rc = xc_domain_populate_physmap_exact(xch, dom, NR_IOREQ_SERVER_PAGES, 0, 0,
                                           ioreq_server_array);
     if ( rc != 0 )
@@ -520,6 +523,9 @@ static int setup_guest(xc_interface *xch,
     if ( xc_clear_domain_pages(xch, dom, ioreq_server_pfn(0), NR_IOREQ_SERVER_PAGES) )
             goto error_out;
 
+    fprintf(stderr, "XXH: hvm_build_x86 set hvm_params: HVM_PARAM_IOREQ_SERVER_PFN:0x%lx;"
+                    " HVM_PARAM_NR_IOREQ_SERVER_PAGES: 8\n",
+                    (unsigned long)ioreq_server_pfn(0));
     /* Tell the domain where the pages are and how many there are */
     xc_hvm_param_set(xch, dom, HVM_PARAM_IOREQ_SERVER_PFN,
                      ioreq_server_pfn(0));
@@ -579,6 +585,7 @@ int xc_hvm_build(xc_interface *xch, uint32_t domid,
     void *image;
     unsigned long image_size;
     int sts;
+    fprintf(stderr, "XXH: %s() start.\n", __func__);
 
     if ( domid == 0 )
         return -1;

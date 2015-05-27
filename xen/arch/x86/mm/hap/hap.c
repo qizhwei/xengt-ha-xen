@@ -52,6 +52,7 @@
 #undef page_to_mfn
 #define page_to_mfn(_pg) _mfn(__page_to_mfn(_pg))
 
+/* ZD NOTE*/
 /************************************************/
 /*          HAP VRAM TRACKING SUPPORT           */
 /************************************************/
@@ -513,6 +514,7 @@ void hap_final_teardown(struct domain *d)
     paging_unlock(d);
 }
 
+/* ZD NOTE */
 void hap_teardown(struct domain *d)
 {
     struct vcpu *v;

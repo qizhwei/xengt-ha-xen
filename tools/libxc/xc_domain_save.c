@@ -894,7 +894,12 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
     int completed = 0;
 
+    int vgt_ha_fd = -1;
+    char vgt_ha_cp_file[256];
+    int is_vgt = 0;
+
     DPRINTF("%s: starting save of domid %u", __func__, dom);
+    ERROR("flag %d debug: %d live: %d superpages: %d %s\n", flags, debug, live, superpages, __TIME__);
 
     if ( hvm && !callbacks->switch_qemu_logdirty )
     {
@@ -917,6 +922,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         ERROR("Unable to get platform info.");
         goto exit;
     }
+    ERROR("max_mfn %lx hvirt_start %lx pt_l %d g_width %d\n", ctx->max_mfn, ctx->hvirt_start, ctx->pt_levels, dinfo->guest_width);
 
     if ( xc_domain_getinfo(xch, dom, 1, &info) != 1 )
     {
@@ -925,6 +931,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     }
 
     shared_info_frame = info.shared_info_frame;
+    ERROR("hvm %d paged %ld shared %ld s_info_frame %lx pause %d\n", info.hvm, info.nr_paged_pages, info.nr_shared_pages, shared_info_frame, info.paused);
 
     /* Map the shared info frame */
     if ( !hvm )
@@ -940,6 +947,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
     /* Get the size of the P2M table */
     dinfo->p2m_size = xc_domain_maximum_gpfn(xch, dom) + 1;
+    ERROR("p2msize %ld\n", dinfo->p2m_size);
 
     if ( dinfo->p2m_size > ~XEN_DOMCTL_PFINFO_LTAB_MASK )
     {
@@ -947,6 +955,15 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         ERROR("Cannot save this big a guest");
         goto out;
     }
+
+    sprintf(vgt_ha_cp_file, "/sys/kernel/debug/vgt/vm%u/ha_checkpoint", dom);
+    vgt_ha_fd = open(vgt_ha_cp_file, O_RDWR);
+    if (vgt_ha_fd == -1) {
+        fprintf(stderr, "Can't open vgt ha file: %s\n", strerror(errno));
+        is_vgt = 0;
+    }
+    else
+        is_vgt = 1;
 
     /* Domain is still running at this point */
     if ( live )
@@ -984,11 +1001,35 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     else
     {
         /* This is a non-live suspend. Suspend the domain .*/
+        ERROR("XXH: suspend start\n");
         if ( suspend_and_state(callbacks->suspend, callbacks->data, xch,
                                io_fd, dom, &info) )
         {
             ERROR("Domain appears not to have suspended");
             goto out;
+        }
+        ERROR("XXH: suspend end! start save vgt info %s\n", __TIME__);
+        if (is_vgt) {
+            char *vgt_ha_cmd = "save";
+	    char buffer[16];
+	    int ch = 0;
+	    if (write_exact(vgt_ha_fd, vgt_ha_cmd, sizeof(vgt_ha_cmd))) {
+	        ERROR("XXH: write vgt ha file: %s\n", strerror(errno));
+            }
+	    while (ch < 100) {
+	        if (read_exact(vgt_ha_fd, buffer, sizeof(int))) {
+	            ERROR("XXH: read vgt ha file: %s\n", strerror(errno));
+                }
+		ch++;
+	        ERROR("XXH: %d read vgt ha file: %s\n", ch, buffer);
+		if (atoi(buffer)) {
+		    ERROR("XXH: saving! ret=1 returned!\n");
+		    sleep(1);
+		} else {
+		    ERROR("XXH: save done! ret=0 returned! %s\n", __TIME__);
+		    break;
+		}
+	    }
         }
     }
 
@@ -1011,6 +1052,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     to_send = xc_hypercall_buffer_alloc_pages(xch, to_send, NRPAGES(bitmap_size(dinfo->p2m_size)));
     to_skip = xc_hypercall_buffer_alloc_pages(xch, to_skip, NRPAGES(bitmap_size(dinfo->p2m_size)));
     to_fix  = calloc(1, bitmap_size(dinfo->p2m_size));
+    ERROR("nrpages %ld\n", NRPAGES(bitmap_size(dinfo->p2m_size)));
 
     if ( !to_send || !to_fix || !to_skip )
     {
@@ -1096,7 +1138,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         DPRINTF("Had %d unexplained entries in p2m table\n", err);
     }
 
-    print_stats(xch, dom, 0, &time_stats, &shadow_stats, 0);
+    print_stats(xch, dom, 0, &time_stats, &shadow_stats, 1);
 
     tmem_saved = xc_tmem_save(xch, dom, io_fd, live, XC_SAVE_ID_TMEM);
     if ( tmem_saved == -1 )

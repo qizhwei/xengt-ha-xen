@@ -484,6 +484,7 @@ void libxl__multidev_prepare_with_aodev(libxl__multidev *multidev,
                                         libxl__ao_device *aodev) {
     STATE_AO_GC(multidev->ao);
 
+    LOG(ERROR, "XXH: %s start\n", __func__);
     aodev->multidev = multidev;
     aodev->callback = libxl__multidev_one_callback;
     libxl__prepare_ao_device(ao, aodev);
@@ -511,6 +512,7 @@ void libxl__multidev_one_callback(libxl__egc *egc, libxl__ao_device *aodev)
     libxl__multidev *multidev = aodev->multidev;
     int i, error = 0;
 
+    LOG(ERROR, "XXH: %s start\n", __func__);
     aodev->active = 0;
 
     for (i = 0; i < multidev->used; i++) {

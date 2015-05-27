@@ -955,6 +955,7 @@ static void domcreate_bootloader_done(libxl__egc *egc,
     libxl__srm_restore_autogen_callbacks *const callbacks =
         &dcs->shs.callbacks.restore.a;
 
+    fprintf(stderr, "XXH: %s start\n", __func__);
     if (rc) {
         domcreate_rebuild_done(egc, dcs, rc);
         return;
@@ -1042,6 +1043,7 @@ void libxl__xc_domain_restore_done(libxl__egc *egc, void *dcs_void,
     libxl__domain_build_state *const state = &dcs->build_state;
     const int fd = dcs->restore_fd;
 
+    LOG(ERROR, "XXH: %s start\n", __func__);
     if (ret)
         goto out;
 
@@ -1117,6 +1119,7 @@ static void domcreate_rebuild_done(libxl__egc *egc,
     libxl_domain_config *const d_config = dcs->guest_config;
     libxl_ctx *const ctx = CTX;
 
+    LOG(ERROR, "XXH: %s start\n", __func__);
     if (ret) {
         LIBXL__LOG(ctx, LIBXL__LOG_ERROR, "cannot (re-)build domain: %d", ret);
         ret = ERROR_FAIL;
@@ -1149,6 +1152,7 @@ static void domcreate_launch_dm(libxl__egc *egc, libxl__multidev *multidev,
     libxl_domain_config *const d_config = dcs->guest_config;
     libxl__domain_build_state *const state = &dcs->build_state;
 
+    LOG(ERROR, "XXH: %s start\n", __func__);
     if (ret) {
         LOG(ERROR, "unable to add disk devices");
         goto error_out;
@@ -1314,6 +1318,7 @@ static void domcreate_devmodel_started(libxl__egc *egc,
     /* convenience aliases */
     libxl_domain_config *const d_config = dcs->guest_config;
 
+    fprintf(stderr, "XXH: %s start\n", __func__);
     if (ret) {
         LIBXL__LOG(ctx, LIBXL__LOG_ERROR,
                    "device model did not start: %d", ret);
@@ -1390,6 +1395,7 @@ static void domcreate_attach_pci(libxl__egc *egc, libxl__multidev *multidev,
     /* convenience aliases */
     libxl_domain_config *const d_config = dcs->guest_config;
 
+    fprintf(stderr, "XXH: %s start\n", __func__);
     if (ret) {
         LOG(ERROR, "unable to add vtpm devices");
         goto error_out;
@@ -1432,6 +1438,7 @@ static void domcreate_complete(libxl__egc *egc,
     libxl_domain_config *const d_config = dcs->guest_config;
     libxl_domain_config *d_config_saved = &dcs->guest_config_saved;
 
+    fprintf(stderr, "XXH: %s start\n", __func__);
     if (!rc && d_config->b_info.exec_ssidref)
         rc = xc_flask_relabel_domain(CTX->xch, dcs->guest_domid, d_config->b_info.exec_ssidref);
 

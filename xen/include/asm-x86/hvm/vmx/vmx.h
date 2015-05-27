@@ -522,6 +522,7 @@ void ept_p2m_uninit(struct p2m_domain *p2m);
 void ept_walk_table(struct domain *d, unsigned long gfn);
 bool_t ept_handle_misconfig(uint64_t gpa);
 void setup_ept_dump(void);
+void setup_partial_ept_dump(void);
 
 void update_guest_eip(void);
 

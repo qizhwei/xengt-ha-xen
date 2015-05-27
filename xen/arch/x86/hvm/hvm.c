@@ -400,6 +400,7 @@ bool_t hvm_io_pending(struct vcpu *v)
 
 static bool_t hvm_wait_for_io(struct hvm_ioreq_vcpu *sv, ioreq_t *p)
 {
+    /* ZD NOTE: ioreq-server sending should-be-emulated ioreqs from here? */
     /* NB. Optimised for common case (p->state == STATE_IOREQ_NONE). */
     while ( p->state != STATE_IOREQ_NONE )
     {
@@ -467,6 +468,8 @@ static int hvm_alloc_ioreq_gmfn(struct domain *d, unsigned long *gmfn)
 {
     unsigned int i;
     int rc;
+    dprintk(XENLOG_G_ERR, "XXH: %s() start, ioreq_gmfn.mask=0x%lx\n",
+            __func__, (d->arch.hvm_domain.ioreq_gmfn.mask));
 
     rc = -ENOMEM;
     for ( i = 0; i < sizeof(d->arch.hvm_domain.ioreq_gmfn.mask) * 8; i++ )
@@ -475,6 +478,10 @@ static int hvm_alloc_ioreq_gmfn(struct domain *d, unsigned long *gmfn)
         {
             *gmfn = d->arch.hvm_domain.ioreq_gmfn.base + i;
             rc = 0;
+            dprintk(XENLOG_G_ERR, "XXH: %s() first mask bit:%u,"
+                    " base=0x%lx gmfn=0x%lx\n",
+                __func__, i, d->arch.hvm_domain.ioreq_gmfn.base,
+                *gmfn);
             break;
         }
     }
@@ -485,8 +492,11 @@ static int hvm_alloc_ioreq_gmfn(struct domain *d, unsigned long *gmfn)
 static void hvm_free_ioreq_gmfn(struct domain *d, unsigned long gmfn)
 {
     unsigned int i = gmfn - d->arch.hvm_domain.ioreq_gmfn.base;
+    dprintk(XENLOG_G_ERR, "XXH: %s() start, gmfn=%lx; i=%u; ioreq_gmfn.mask=0x%lx\n",
+            __func__, gmfn, i, (d->arch.hvm_domain.ioreq_gmfn.mask));
 
-    clear_bit(i, &d->arch.hvm_domain.ioreq_gmfn.mask);
+    //clear_bit(i, &d->arch.hvm_domain.ioreq_gmfn.mask);
+    set_bit(i, &d->arch.hvm_domain.ioreq_gmfn.mask);
 }
 
 static void hvm_unmap_ioreq_page(struct hvm_ioreq_server *s, bool_t buf)
@@ -504,12 +514,20 @@ static int hvm_map_ioreq_page(
     struct page_info *page;
     void *va;
     int rc;
+    dprintk(XENLOG_G_ERR, "XXH: %s(buf:%d) start\n", __func__, (int)buf);
 
-    if ( (rc = prepare_ring_for_helper(d, gmfn, &page, &va)) )
+    if ( (rc = prepare_ring_for_helper(d, gmfn, &page, &va)) ) {
+        dprintk(XENLOG_G_ERR, "XXH: %s() prepare_ring failed, rc=%d\n",
+                __func__, rc);
         return rc;
+    }
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() cp1\n", __func__);
     if ( (iorp->va != NULL) || d->is_dying )
     {
+        dprintk(XENLOG_G_ERR, "XXH: %s() d->is_dying=%d, "\
+                "iorp->va!=NULL=%d, rc=%d\n",
+                __func__, d->is_dying?1:0, iorp->va != NULL?1:0, rc);
         destroy_ring_for_helper(&va, page);
         return -EINVAL;
     }
@@ -518,12 +536,15 @@ static int hvm_map_ioreq_page(
     iorp->page = page;
     iorp->gmfn = gmfn;
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() success end. Set page, va=%p, and gmfn=0x%lx\n",
+             __func__, va, gmfn);
     return 0;
 }
 
 static void hvm_remove_ioreq_gmfn(
     struct domain *d, struct hvm_ioreq_page *iorp)
 {
+    dprintk(XENLOG_G_ERR, "XXH: %s() start\n", __func__);
     guest_physmap_remove_page(d, iorp->gmfn, 
                               page_to_mfn(iorp->page), 0);
     clear_page(iorp->va);
@@ -532,6 +553,7 @@ static void hvm_remove_ioreq_gmfn(
 static int hvm_add_ioreq_gmfn(
     struct domain *d, struct hvm_ioreq_page *iorp)
 {
+    dprintk(XENLOG_G_ERR, "XXH: %s() start\n", __func__);
     clear_page(iorp->va);
     return guest_physmap_add_page(d, iorp->gmfn,
                                   page_to_mfn(iorp->page), 0);
@@ -607,6 +629,7 @@ static int hvm_ioreq_server_add_vcpu(struct hvm_ioreq_server *s,
 {
     struct hvm_ioreq_vcpu *sv;
     int rc;
+    dprintk(XENLOG_G_ERR, "XXH: %s() start\n", __func__);
 
     sv = xzalloc(struct hvm_ioreq_vcpu);
 
@@ -644,16 +667,21 @@ static int hvm_ioreq_server_add_vcpu(struct hvm_ioreq_server *s,
         hvm_update_ioreq_evtchn(s, sv);
 
     spin_unlock(&s->lock);
+    dprintk(XENLOG_G_ERR, "XXH: %s() success end\n", __func__);
+
     return 0;
 
  fail3:
+    dprintk(XENLOG_G_ERR, "XXH: %s() fail3 end\n", __func__);
     free_xen_event_channel(v, sv->ioreq_evtchn);
     
  fail2:
+    dprintk(XENLOG_G_ERR, "XXH: %s() fail2 end\n", __func__);
     spin_unlock(&s->lock);
     xfree(sv);
 
  fail1:
+    dprintk(XENLOG_G_ERR, "XXH: %s() fail1 end, rc=%d\n", __func__, rc);
     return rc;
 }
 
@@ -717,9 +745,11 @@ static int hvm_ioreq_server_map_pages(struct hvm_ioreq_server *s,
     struct domain *d = s->domain;
     unsigned long ioreq_pfn, bufioreq_pfn;
     int rc;
+    dprintk(XENLOG_G_ERR, "XXH: %s() start\n", __func__);
 
     if ( is_default )
     {
+        dprintk(XENLOG_G_ERR, "XXH: %s() is_default\n", __func__);
         ioreq_pfn = d->arch.hvm_domain.params[HVM_PARAM_IOREQ_PFN];
 
         /*
@@ -731,43 +761,59 @@ static int hvm_ioreq_server_map_pages(struct hvm_ioreq_server *s,
     }
     else
     {
+        dprintk(XENLOG_G_ERR, "XXH: %s() !is_default\n", __func__);
+        dprintk(XENLOG_G_ERR, "XXH: %s() cp1\n", __func__);
         rc = hvm_alloc_ioreq_gmfn(d, &ioreq_pfn);
         if ( rc )
             goto fail1;
 
+        dprintk(XENLOG_G_ERR, "XXH: %s() cp2, handle_bufioreq?%s\n",
+                __func__, handle_bufioreq?"YES":"NO");
         if ( handle_bufioreq )
         {
             rc = hvm_alloc_ioreq_gmfn(d, &bufioreq_pfn);
             if ( rc )
                 goto fail2;
+            dprintk(XENLOG_G_ERR, "XXH: %s() cp1.1\n", __func__);
         }
     }
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() cp2\n", __func__);
+    dprintk(XENLOG_G_ERR, "XXH: %s() hvm_map_ioreq_pages(ioreq_pfn:%lu)\n",
+            __func__, ioreq_pfn);
     rc = hvm_map_ioreq_page(s, 0, ioreq_pfn);
     if ( rc )
         goto fail3;
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() cp3, handle_bufioreq?%s\n",
+                __func__, handle_bufioreq?"YES":"NO");
     if ( handle_bufioreq )
     {
         rc = hvm_map_ioreq_page(s, 1, bufioreq_pfn);
         if ( rc )
             goto fail4;
+        dprintk(XENLOG_G_ERR, "XXH: %s() cp3.1\n", __func__);
     }
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() success end\n", __func__);
     return 0;
 
 fail4:
+    dprintk(XENLOG_G_ERR, "XXH: %s() f4\n", __func__);
     hvm_unmap_ioreq_page(s, 0);
 
 fail3:
+    dprintk(XENLOG_G_ERR, "XXH: %s() f3\n", __func__);
     if ( !is_default && handle_bufioreq )
         hvm_free_ioreq_gmfn(d, bufioreq_pfn);
 
 fail2:
+    dprintk(XENLOG_G_ERR, "XXH: %s() f2\n", __func__);
     if ( !is_default )
         hvm_free_ioreq_gmfn(d, ioreq_pfn);
 
 fail1:
+    dprintk(XENLOG_G_ERR, "XXH: %s() f1\n", __func__);
     return rc;
 }
 
@@ -776,6 +822,8 @@ static void hvm_ioreq_server_unmap_pages(struct hvm_ioreq_server *s,
 {
     struct domain *d = s->domain;
     bool_t handle_bufioreq = ( s->bufioreq.va != NULL );
+    dprintk(XENLOG_G_ERR, "XXH: %s() start, ioreq_server_id=%d\n",
+                __func__, (int)s->id);
 
     if ( handle_bufioreq )
         hvm_unmap_ioreq_page(s, 1);
@@ -854,6 +902,7 @@ static void hvm_ioreq_server_enable(struct hvm_ioreq_server *s,
     struct domain *d = s->domain;
     struct hvm_ioreq_vcpu *sv;
     bool_t handle_bufioreq = ( s->bufioreq.va != NULL );
+    dprintk(XENLOG_G_ERR, "XXH: %s() start\n", __func__);
 
     spin_lock(&s->lock);
 
@@ -862,8 +911,19 @@ static void hvm_ioreq_server_enable(struct hvm_ioreq_server *s,
 
     if ( !is_default )
     {
+        /* ZD NOTE the page for this ioreq server is removed here!*/
+        /* this shared page is for passing emulation req/res, its removed
+        *   from the guest's memory space(cannot be lookup from guest's ept table)
+        *   before ioreq-server enabled. The page is remapped in dm domain
+        *   (dom0's xengt driver, in this case), so the following code does NOT
+        *   really deallocate the physical page usage, just cannot be accessed
+        *   through ioreq-gmfn for the corresponding guest domain.
+        */
+        /* what if we bypass remove_gmfn for vgt's ioreq-server? */
+#define ZD_VGT_TRY 1
+#if ZD_VGT_TRY
         hvm_remove_ioreq_gmfn(d, &s->ioreq);
-
+#endif
         if ( handle_bufioreq )
             hvm_remove_ioreq_gmfn(d, &s->bufioreq);
     }
@@ -884,6 +944,7 @@ static void hvm_ioreq_server_disable(struct hvm_ioreq_server *s,
 {
     struct domain *d = s->domain;
     bool_t handle_bufioreq = ( s->bufioreq.va != NULL );
+    dprintk(XENLOG_G_ERR, "XXH: %s() start\n", __func__);
 
     spin_lock(&s->lock);
 
@@ -910,6 +971,7 @@ static int hvm_ioreq_server_init(struct hvm_ioreq_server *s, struct domain *d,
 {
     struct vcpu *v;
     int rc;
+    dprintk(XENLOG_G_ERR, "XXH: %s() start\n", __func__);
 
     s->id = id;
     s->domain = d;
@@ -919,14 +981,17 @@ static int hvm_ioreq_server_init(struct hvm_ioreq_server *s, struct domain *d,
     INIT_LIST_HEAD(&s->ioreq_vcpu_list);
     spin_lock_init(&s->bufioreq_lock);
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() cp1\n", __func__);
     rc = hvm_ioreq_server_alloc_rangesets(s, is_default);
     if ( rc )
         return rc;
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() cp2\n", __func__);
     rc = hvm_ioreq_server_map_pages(s, is_default, handle_bufioreq);
     if ( rc )
         goto fail_map;
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() cp3\n", __func__);
     for_each_vcpu ( d, v )
     {
         rc = hvm_ioreq_server_add_vcpu(s, is_default, v);
@@ -934,15 +999,18 @@ static int hvm_ioreq_server_init(struct hvm_ioreq_server *s, struct domain *d,
             goto fail_add;
     }
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() success end\n", __func__);
     return 0;
 
  fail_add:
+    dprintk(XENLOG_G_ERR, "XXH: %s() fail_add end, rc=%d\n", __func__, rc);
     hvm_ioreq_server_remove_all_vcpus(s);
     hvm_ioreq_server_unmap_pages(s, is_default);
 
  fail_map:
     hvm_ioreq_server_free_rangesets(s, is_default);
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() fail_map end, rc=%d\n", __func__, rc);
     return rc;
 }
 
@@ -986,24 +1054,30 @@ static int hvm_create_ioreq_server(struct domain *d, domid_t domid,
 {
     struct hvm_ioreq_server *s;
     int rc;
+    dprintk(XENLOG_G_ERR, "XXH: %s() start is_default: %s\n", __func__,
+                is_default?"YES":"NO");
 
     rc = -ENOMEM;
     s = xzalloc(struct hvm_ioreq_server);
     if ( !s )
         goto fail1;
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() cp1\n", __func__);
     domain_pause(d);
     spin_lock(&d->arch.hvm_domain.ioreq_server.lock);
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() cp2\n", __func__);
     rc = -EEXIST;
     if ( is_default && d->arch.hvm_domain.default_ioreq_server != NULL )
         goto fail2;
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() cp3\n", __func__);
     rc = hvm_ioreq_server_init(s, d, domid, is_default, handle_bufioreq,
                                next_ioservid(d));
     if ( rc )
         goto fail3;
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() cp4\n", __func__);
     list_add(&s->list_entry,
              &d->arch.hvm_domain.ioreq_server.list);
 
@@ -1015,10 +1089,12 @@ static int hvm_create_ioreq_server(struct domain *d, domid_t domid,
 
     if ( id )
         *id = s->id;
+    dprintk(XENLOG_G_ERR, "XXH: %s() id=%d\n", __func__, id?(int)*id:-1);
 
     spin_unlock(&d->arch.hvm_domain.ioreq_server.lock);
     domain_unpause(d);
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() success end\n", __func__);
     return 0;
 
  fail3:
@@ -1028,6 +1104,7 @@ static int hvm_create_ioreq_server(struct domain *d, domid_t domid,
 
     xfree(s);
  fail1:
+    dprintk(XENLOG_G_ERR, "XXH: %s() fail end, rc=%d\n", __func__, rc);
     return rc;
 }
 
@@ -1035,6 +1112,7 @@ static int hvm_destroy_ioreq_server(struct domain *d, ioservid_t id)
 {
     struct hvm_ioreq_server *s;
     int rc;
+    dprintk(XENLOG_G_ERR, "XXH: %s() start\n", __func__);
 
     spin_lock(&d->arch.hvm_domain.ioreq_server.lock);
 
@@ -1065,6 +1143,7 @@ static int hvm_destroy_ioreq_server(struct domain *d, ioservid_t id)
 
     spin_unlock(&d->arch.hvm_domain.ioreq_server.lock);
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() end, rc=%d\n", __func__, rc);
     return rc;
 }
 
@@ -1213,6 +1292,8 @@ static int hvm_set_ioreq_server_state(struct domain *d, ioservid_t id,
 {
     struct list_head *entry;
     int rc;
+    dprintk(XENLOG_G_ERR, "XXH: %s() start %s ioreq server id:%u\n",
+        __func__, enabled?"enable":"disable", (unsigned)id);
 
     spin_lock(&d->arch.hvm_domain.ioreq_server.lock);
 
@@ -1344,6 +1425,7 @@ static int hvm_set_dm_domain(struct domain *d, domid_t domid)
 {
     struct hvm_ioreq_server *s;
     int rc = 0;
+    dprintk(XENLOG_G_ERR, "XXH: %s() start\n", __func__);
 
     spin_lock(&d->arch.hvm_domain.ioreq_server.lock);
 
@@ -1401,6 +1483,7 @@ static int hvm_set_dm_domain(struct domain *d, domid_t domid)
 int hvm_domain_initialise(struct domain *d)
 {
     int rc;
+    dprintk(XENLOG_G_ERR, "XXH: %s() start\n", __func__);
 
     if ( !hvm_enabled )
     {
@@ -5270,31 +5353,41 @@ static int hvmop_create_ioreq_server(
     xen_hvm_create_ioreq_server_t op;
     struct domain *d;
     int rc;
+    dprintk(XENLOG_G_ERR, "XXH: %s() start\n", __func__);
 
     if ( copy_from_guest(&op, uop, 1) )
         return -EFAULT;
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() next: rcu_lock_remote_domain_by_id\n", __func__);
     rc = rcu_lock_remote_domain_by_id(op.domid, &d);
     if ( rc != 0 )
         return rc;
 
     rc = -EINVAL;
+    dprintk(XENLOG_G_ERR, "XXH: %s() next: is_hvm_domain\n", __func__);
     if ( !is_hvm_domain(d) )
+    {
+        dprintk(XENLOG_G_ERR, "XXH: %s() !is_hvm_domain() goto out!!\n", __func__);
         goto out;
+    }
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() next: xsm_hvm_ioreq_server\n", __func__);
     rc = xsm_hvm_ioreq_server(XSM_DM_PRIV, d, HVMOP_create_ioreq_server);
     if ( rc != 0 )
         goto out;
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() next: hvm_create_ioreq_server\n", __func__);
     rc = hvm_create_ioreq_server(d, curr_d->domain_id, 0,
                                  !!op.handle_bufioreq, &op.id);
     if ( rc != 0 )
         goto out;
 
+    dprintk(XENLOG_G_ERR, "XXH: %s() next: copy_to_guest(uop, &op, 1)\n", __func__);
     rc = copy_to_guest(uop, &op, 1) ? -EFAULT : 0;
     
  out:
     rcu_unlock_domain(d);
+    dprintk(XENLOG_G_ERR, "XXH: %s() end: rc=%d\n", __func__, rc);
     return rc;
 }
 
@@ -5344,6 +5437,8 @@ static int hvmop_map_io_range_to_ioreq_server(
     if ( copy_from_guest(&op, uop, 1) )
         return -EFAULT;
 
+    dprintk(XENLOG_G_ERR, "XXH: %s(dom:%d, srv:%d) type %d start %lx end %lx\n", __func__, (int)op.domid, (int)op.id, op.type, op.start, op.end);
+
     rc = rcu_lock_remote_domain_by_id(op.domid, &d);
     if ( rc != 0 )
         return rc;
@@ -5373,6 +5468,8 @@ static int hvmop_unmap_io_range_from_ioreq_server(
 
     if ( copy_from_guest(&op, uop, 1) )
         return -EFAULT;
+
+    dprintk(XENLOG_G_ERR, "XXH: %s(dom:%d, srv:%d) type %d start %lx end %lx\n", __func__, (int)op.domid, (int)op.id, op.type, op.start, op.end);
 
     rc = rcu_lock_remote_domain_by_id(op.domid, &d);
     if ( rc != 0 )
@@ -5484,29 +5581,41 @@ long do_hvm_op(unsigned long op, XEN_GUEST_HANDLE_PARAM(void) arg)
     case HVMOP_create_ioreq_server:
         rc = hvmop_create_ioreq_server(
             guest_handle_cast(arg, xen_hvm_create_ioreq_server_t));
+        dprintk(XENLOG_G_ERR, "XXH: %s(): HVMOP_create_ioreq_server, rc=%d\n",
+                __func__, (int)rc);
         break;
     
     case HVMOP_get_ioreq_server_info:
+        dprintk(XENLOG_G_ERR, "XXH: %s(): HVMOP_get_ioreq_server_info\n",
+                __func__);
         rc = hvmop_get_ioreq_server_info(
             guest_handle_cast(arg, xen_hvm_get_ioreq_server_info_t));
         break;
     
     case HVMOP_map_io_range_to_ioreq_server:
+        dprintk(XENLOG_G_ERR, "XXH: %s(): HVMOP_map_io_range_to_ioreq_server\n",
+                __func__);
         rc = hvmop_map_io_range_to_ioreq_server(
             guest_handle_cast(arg, xen_hvm_io_range_t));
         break;
     
     case HVMOP_unmap_io_range_from_ioreq_server:
+        dprintk(XENLOG_G_ERR, "XXH: %s(): HVMOP_unmap_io_range_from_ioreq_server\n",
+                __func__);
         rc = hvmop_unmap_io_range_from_ioreq_server(
             guest_handle_cast(arg, xen_hvm_io_range_t));
         break;
 
     case HVMOP_set_ioreq_server_state:
+        dprintk(XENLOG_G_ERR, "XXH: %s(): HVMOP_set_ioreq_server_state\n",
+                __func__);
         rc = hvmop_set_ioreq_server_state(
             guest_handle_cast(arg, xen_hvm_set_ioreq_server_state_t));
         break;
     
     case HVMOP_destroy_ioreq_server:
+        dprintk(XENLOG_G_ERR, "XXH: %s(): HVMOP_destroy_ioreq_server\n",
+                __func__);
         rc = hvmop_destroy_ioreq_server(
             guest_handle_cast(arg, xen_hvm_destroy_ioreq_server_t));
         break;
@@ -5687,6 +5796,8 @@ long do_hvm_op(unsigned long op, XEN_GUEST_HANDLE_PARAM(void) arg)
                     break;
                 }
                 d->arch.hvm_domain.ioreq_gmfn.base = a.value;
+                dprintk(XENLOG_G_ERR, "XXH: %s(): HVM_PARAM_IOREQ_SERVER_PFN, set base=%lu\n",
+                    __func__, a.value);
                 break;
             case HVM_PARAM_NR_IOREQ_SERVER_PAGES:
             {
@@ -5756,6 +5867,9 @@ long do_hvm_op(unsigned long op, XEN_GUEST_HANDLE_PARAM(void) arg)
                 /* May need to create server */
                 domid = d->arch.hvm_domain.params[HVM_PARAM_DM_DOMAIN];
                 rc = hvm_create_ioreq_server(d, domid, 1, 1, NULL);
+                dprintk(XENLOG_G_ERR, "XXH: %s(): get_HVM_PARAM: try to "\
+                                        "hvm_create_ioreq_server, rc=%ld\n",
+                    __func__, rc);
                 if ( rc != 0 && rc != -EEXIST )
                     goto param_fail;
                 /*FALLTHRU*/

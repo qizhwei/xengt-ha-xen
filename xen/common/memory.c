@@ -1168,6 +1168,7 @@ int prepare_ring_for_helper(
     }
 #endif
 
+    printk("XXH %s 0 page %p\n", __func__, page);
     if ( !page )
         return -EINVAL;
 

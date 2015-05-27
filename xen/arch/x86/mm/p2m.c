@@ -242,6 +242,9 @@ mfn_t __get_gfn_type_access(struct p2m_domain *p2m, unsigned long gfn,
                     unsigned int *page_order, bool_t locked)
 {
     mfn_t mfn;
+    /*if ( unlikely(gfn >= 0xfeff0 && gfn <= 0xfeff1) ) {
+        dprintk(XENLOG_G_ERR, "XXH: %s()(gfn:0x%lx)\n", __func__, gfn);
+    }*/
 
     /* Unshare makes no sense withuot populate. */
     if ( q & P2M_UNSHARE )
@@ -260,10 +263,17 @@ mfn_t __get_gfn_type_access(struct p2m_domain *p2m, unsigned long gfn,
         gfn_lock(p2m, gfn, 0);
 
     mfn = p2m->get_entry(p2m, gfn, t, a, q, page_order);
+    /*if ( unlikely(gfn >= 0xfeff0 && gfn <= 0xfeff1) ) {
+        dprintk(XENLOG_G_ERR, "XXH: %s()(gfn:0x%lx->mfn:0x%lx) p2mtype:0x%lx\n",
+                __func__, gfn, mfn, (unsigned long)(*t));
+    }*/
 
     if ( (q & P2M_UNSHARE) && p2m_is_shared(*t) )
     {
         ASSERT(!p2m_is_nestedp2m(p2m));
+        /*if ( unlikely(gfn >= 0xfeff0 && gfn <= 0xfeff1) ) {
+            dprintk(XENLOG_G_ERR, "XXH: %s()(gfn:0x%lx) unshare a shared\n", __func__, gfn);
+        }*/
         /* Try to unshare. If we fail, communicate ENOMEM without
          * sleeping. */
         if ( mem_sharing_unshare_page(p2m->domain, gfn, 0) < 0 )
@@ -273,6 +283,10 @@ mfn_t __get_gfn_type_access(struct p2m_domain *p2m, unsigned long gfn,
 
     if (unlikely((p2m_is_broken(*t))))
     {
+        /*if ( unlikely(gfn >= 0xfeff0 && gfn <= 0xfeff1) ) {
+            dprintk(XENLOG_G_ERR, "XXH: %s()(gfn:0x%lx) p2m_is_broken!!! p2mtype:0x%lx\n",
+                __func__, gfn, (unsigned long)(*t));
+        }*/
         /* Return invalid_mfn to avoid caller's access */
         mfn = _mfn(INVALID_MFN);
         if ( q & P2M_ALLOC )
@@ -303,6 +317,10 @@ struct page_info *get_page_from_gfn_p2m(
     p2m_type_t _t;
     mfn_t mfn;
 
+    /*if ( unlikely(gfn >= 0xfeff0 && gfn <= 0xfeff1) ) {
+        dprintk(XENLOG_G_ERR, "XXH: %s(gfn:0x%lx) start\n", __func__, gfn);
+    }*/
+
     /* Allow t or a to be NULL */
     t = t ?: &_t;
     a = a ?: &_a;
@@ -310,12 +328,23 @@ struct page_info *get_page_from_gfn_p2m(
     if ( likely(!p2m_locked_by_me(p2m)) )
     {
         /* Fast path: look up and get out */
+        /*if ( unlikely(gfn >= 0xfeff0 && gfn <= 0xfeff1) ) {
+            dprintk(XENLOG_G_ERR, "XXH: %s() fast path(gfn:0x%lx)\n", __func__, gfn);
+        }*/
         p2m_read_lock(p2m);
         mfn = __get_gfn_type_access(p2m, gfn, t, a, 0, NULL, 0);
+        /*if ( unlikely(gfn >= 0xfeff0 && gfn <= 0xfeff1) ) {
+            dprintk(XENLOG_G_ERR, "XXH: %s() mfn=0x%lx; p2mtype:0x%lx, p2macc:%lu\n",
+                __func__, mfn, (unsigned long)(*t), (unsigned long)(*a));
+        }*/
         if ( p2m_is_any_ram(*t) && mfn_valid(mfn)
              && !((q & P2M_UNSHARE) && p2m_is_shared(*t)) )
         {
             page = mfn_to_page(mfn);
+            /*if ( unlikely(gfn >= 0xfeff0 && gfn <= 0xfeff1) ) {
+                dprintk(XENLOG_G_ERR, "XXH: %s() fpath: valid! get page(mfn_to_page) addr:%s\n",
+                        __func__, page?"YES":"NO");
+            }*/
             if ( unlikely(p2m_is_foreign(*t)) )
             {
                 struct domain *fdom = page_get_owner_and_reference(page);
@@ -330,14 +359,24 @@ struct page_info *get_page_from_gfn_p2m(
         }
         p2m_read_unlock(p2m);
 
-        if ( page )
+        if ( page ) {
+            /*if ( unlikely(gfn >= 0xfeff0 && gfn <= 0xfeff1) )
+                dprintk(XENLOG_G_ERR, "XXH: %s() fpath: get page succ! return page\n", __func__);*/
             return page;
+        }
+        /*if ( unlikely(gfn >= 0xfeff0 && gfn <= 0xfeff1) )
+            dprintk(XENLOG_G_ERR, "XXH: %s() fpath: page=NULL, detect p2mtype(GFN) & may fall slow path!\n", __func__);*/
 
         /* Error path: not a suitable GFN at all */
-        if ( !p2m_is_ram(*t) && !p2m_is_paging(*t) && !p2m_is_pod(*t) )
+        if ( !p2m_is_ram(*t) && !p2m_is_paging(*t) && !p2m_is_pod(*t) ) {
+            /*if ( unlikely(gfn >= 0xfeff0 && gfn <= 0xfeff1) )
+                dprintk(XENLOG_G_ERR, "XXH: %s() fpath: get page failed! return NULL\n", __func__);*/
             return NULL;
+        }
     }
 
+    /*if ( unlikely(gfn >= 0xfeff0 && gfn <= 0xfeff1) )
+        dprintk(XENLOG_G_ERR, "XXH: %s() slow path (gfn:0x%lx)!\n", __func__, gfn);*/
     /* Slow path: take the write lock and do fixups */
     mfn = get_gfn_type_access(p2m, gfn, t, a, q, NULL);
     if ( p2m_is_ram(*t) && mfn_valid(mfn) )
@@ -371,6 +410,13 @@ int p2m_set_entry(struct p2m_domain *p2m, unsigned long gfn, mfn_t mfn,
                       hvm_hap_has_2mb(d) && opt_hap_2mb) ? PAGE_ORDER_2M : PAGE_ORDER_4K;
         else
             order = 0;
+
+        /*if ( unlikely(gfn >= 0xfeff0 && gfn <= 0xfeff1) ) {
+            dprintk(XENLOG_G_ERR, "XXH: %s() set gfn:%#lx <- mfn:%#lx "
+                    "p2mtype:0x%lx; p2access:%lu\n",
+                    __func__, gfn, mfn, (unsigned long)p2mt,
+                    (unsigned long)p2ma);
+        }*/
 
         set_rc = p2m->set_entry(p2m, gfn, mfn, order, p2mt, p2ma);
         if ( set_rc )
@@ -521,6 +567,8 @@ p2m_remove_page(struct p2m_domain *p2m, unsigned long gfn, unsigned long mfn,
     p2m_type_t t;
     p2m_access_t a;
 
+    /* ZD NOTE: the following if condition are for mmio addresses which are not translated? 
+            (according to my evernote (mailing list)) */
     if ( !paging_mode_translate(p2m->domain) )
     {
         if ( need_iommu(p2m->domain) )
@@ -531,6 +579,9 @@ p2m_remove_page(struct p2m_domain *p2m, unsigned long gfn, unsigned long mfn,
 
     ASSERT(gfn_locked_by_me(p2m, gfn));
     P2M_DEBUG("removing gfn=%#lx mfn=%#lx\n", gfn, mfn);
+    /*if ( unlikely(gfn >= 0xfeff0 && gfn <= 0xfeff1) )
+        dprintk(XENLOG_G_ERR, "XXH: %s() removing gfn=%#lx mfn=%#lx\n",
+                __func__, gfn, mfn);*/
 
     if ( mfn_valid(_mfn(mfn)) )
     {
@@ -595,6 +646,9 @@ guest_physmap_add_entry(struct domain *d, unsigned long gfn,
     p2m_lock(p2m);
 
     P2M_DEBUG("adding gfn=%#lx mfn=%#lx\n", gfn, mfn);
+    /*if ( unlikely(gfn >= 0xfeff0 && gfn <= 0xfeff1) )
+        dprintk(XENLOG_G_ERR, "XXH: %s() adding gfn=%#lx mfn=%#lx\n",
+                __func__, gfn, mfn);*/
 
     /* First, remove m->p mappings for existing p->m mappings */
     for ( i = 0; i < (1UL << page_order); i++ )
@@ -683,6 +737,7 @@ guest_physmap_add_entry(struct domain *d, unsigned long gfn,
         }
     }
 
+    /*ZD NOTE here */
     /* Now, actually do the two-way mapping */
     if ( mfn_valid(_mfn(mfn)) ) 
     {

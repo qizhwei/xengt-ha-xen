@@ -813,6 +813,10 @@ static mfn_t ept_get_entry(struct p2m_domain *p2m,
     mfn_t mfn = _mfn(INVALID_MFN);
     struct ept_data *ept = &p2m->ept;
 
+    /*if ( unlikely(gfn >= 0xfeff0 && gfn <= 0xfeff1) ) {
+        dprintk(XENLOG_G_ERR, "XXH: %s()(gfn:0x%lx)\n", __func__, gfn);
+    }*/
+
     *t = p2m_mmio_dm;
     *a = p2m_access_n;
 
@@ -958,6 +962,7 @@ static void ept_change_entry_type_global(struct p2m_domain *p2m,
                                          p2m_type_t ot, p2m_type_t nt)
 {
     unsigned long mfn = ept_get_asr(&p2m->ept);
+    //dprintk(XENLOG_G_ERR, "XXH: %s() start!\n", __func__);
 
     if ( !mfn )
         return;
@@ -1057,6 +1062,7 @@ void ept_sync_domain(struct p2m_domain *p2m)
 int ept_p2m_init(struct p2m_domain *p2m)
 {
     struct ept_data *ept = &p2m->ept;
+    //dprintk(XENLOG_G_ERR, "XXH: %s() start!\n", __func__);
 
     p2m->set_entry = ept_set_entry;
     p2m->get_entry = ept_get_entry;
@@ -1157,15 +1163,98 @@ static void ept_dump_p2m_table(unsigned char key)
     }
 }
 
+static void ept_partial_dump_p2m_table(unsigned char key)
+{
+    struct domain *d;
+    ept_entry_t *table, *ept_entry;
+    int order;
+    int i;
+    int ret = 0;
+    unsigned long gfn, gfn_remainder;
+    unsigned long record_counter = 0;
+    struct p2m_domain *p2m;
+    struct ept_data *ept;
+    static const char memory_types[8][2] = {
+        [0 ... 7] = "?",
+        [MTRR_TYPE_UNCACHABLE]     = "UC",
+        [MTRR_TYPE_WRCOMB]         = "WC",
+        [MTRR_TYPE_WRTHROUGH]      = "WT",
+        [MTRR_TYPE_WRPROT]         = "WP",
+        [MTRR_TYPE_WRBACK]         = "WB",
+        [MTRR_NUM_TYPES]           = "??"
+    };
+
+    for_each_domain(d)
+    {
+        if ( !hap_enabled(d) )
+            continue;
+
+        p2m = p2m_get_hostp2m(d);
+        ept = &p2m->ept;
+        printk("\nZD domain%d partial EPT p2m table:\n", d->domain_id);
+
+        for ( gfn = 0xfc000UL; gfn <= p2m->max_mapped_pfn; gfn += 1UL << order )
+        {
+            char c = 0;
+
+            gfn_remainder = gfn;
+            table = map_domain_page(pagetable_get_pfn(p2m_get_pagetable(p2m)));
+
+            for ( i = ept_get_wl(ept); i > 0; i-- )
+            {
+                ept_entry = table + (gfn_remainder >> (i * EPT_TABLE_ORDER));
+                if ( ept_entry->emt == MTRR_NUM_TYPES )
+                    c = '?';
+                ret = ept_next_level(p2m, 1, &table, &gfn_remainder, i);
+                if ( ret != GUEST_TABLE_NORMAL_PAGE )
+                    break;
+            }
+
+            order = i * EPT_TABLE_ORDER;
+            ept_entry = table + (gfn_remainder >> order);
+            if ( ret != GUEST_TABLE_MAP_FAILED && is_epte_valid(ept_entry) )
+            {
+                if ( ept_entry->sa_p2mt == p2m_populate_on_demand )
+                    printk("gfn: %13lx order: %2d PoD\n", gfn, order);
+                else
+                    printk("gfn: %13lx order: %2d mfn: %13lx %c%c%c %c%c%c\n",
+                           gfn, order, ept_entry->mfn + 0UL,
+                           ept_entry->r ? 'r' : ' ',
+                           ept_entry->w ? 'w' : ' ',
+                           ept_entry->x ? 'x' : ' ',
+                           memory_types[ept_entry->emt][0],
+                           memory_types[ept_entry->emt][1]
+                           ?: ept_entry->emt + '0',
+                           c ?: ept_entry->ipat ? '!' : ' ');
+
+                if ( !(record_counter++ % 100) )
+                    process_pending_softirqs();
+            }
+            unmap_domain_page(table);
+        }
+    }
+}
+
 static struct keyhandler ept_p2m_table = {
     .diagnostic = 0,
     .u.fn = ept_dump_p2m_table,
     .desc = "dump ept p2m table"
 };
 
+static struct keyhandler ept_partial_p2m_table = {
+    .diagnostic = 0,
+    .u.fn = ept_partial_dump_p2m_table,
+    .desc = "XXH: dump partial ept p2m table"
+};
+
 void setup_ept_dump(void)
 {
     register_keyhandler('D', &ept_p2m_table);
+}
+
+void setup_partial_ept_dump(void)
+{
+    register_keyhandler('E', &ept_partial_p2m_table);
 }
 
 /*

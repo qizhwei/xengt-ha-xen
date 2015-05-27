@@ -141,6 +141,7 @@ int libxl__spawn_record_pid(libxl__gc *gc, libxl__spawn_state *spawn, pid_t pid)
 {
     int r, rc;
 
+    fprintf(stderr, "XXH: %s start\n", __func__);
     rc = libxl__ev_child_xenstore_reopen(gc, spawn->what);
     if (rc) goto out;
 
@@ -291,10 +292,17 @@ int libxl__spawn_spawn(libxl__egc *egc, libxl__spawn_state *ss)
     ss->xswait.timeout_ms = ss->timeout_ms;
     ss->xswait.callback = spawn_watch_event;
     rc = libxl__xswait_start(gc, &ss->xswait);
-    if (rc) goto out_err;
+    if (rc) {
+        LOG(ERROR, "XXH: libxl__xswait_start failed (rc=%d)\n", rc);
+        goto out_err;
+    }
 
     pid_t middle = libxl__ev_child_fork(gc, &ss->mid, spawn_middle_death);
-    if (middle ==-1) { rc = ERROR_FAIL; goto out_err; }
+    if (middle ==-1) {
+        LOG(ERROR, "XXH: libxl__ev_child_fork failed (rc=%d)\n", rc);
+        rc = ERROR_FAIL;
+	goto out_err;
+    }
 
     if (middle) {
         /* parent */
@@ -404,6 +412,7 @@ static void spawn_middle_death(libxl__egc *egc, libxl__ev_child *childw,
     EGC_GC;
     libxl__spawn_state *ss = CONTAINER_OF(childw, *ss, mid);
 
+    LOG(ERROR, "XXH: %s start", __func__);
     if ((ss->failed || ss->detaching) &&
         ((WIFEXITED(status) && WEXITSTATUS(status)==0) ||
          (WIFSIGNALED(status) && WTERMSIG(status)==SIGKILL))) {

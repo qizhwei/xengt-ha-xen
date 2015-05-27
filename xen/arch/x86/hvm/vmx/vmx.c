@@ -1805,6 +1805,7 @@ const struct hvm_function_table * __init start_vmx(void)
             vmx_function_table.hap_capabilities |= HVM_HAP_SUPERPAGE_1GB;
 
         setup_ept_dump();
+	setup_partial_ept_dump();
     }
 
     if ( !cpu_has_vmx_virtual_intr_delivery )

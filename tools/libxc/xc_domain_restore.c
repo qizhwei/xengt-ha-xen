@@ -421,6 +421,7 @@ static int compat_buffer_qemu(xc_interface *xch, struct restore_ctx *ctx,
 
     while( (rc = read(fd, qbuf+dlen, blen-dlen)) > 0 ) {
         DPRINTF("Read %d bytes of QEMU data\n", rc);
+        ERROR("Read %d bytes of QEMU data\n", rc);
         dlen += rc;
 
         if (dlen == blen) {
@@ -499,6 +500,7 @@ static int dump_qemu(xc_interface *xch, uint32_t dom, struct tailbuf_hvm *buf)
     FILE *fp;
 
     sprintf(path, XC_DEVICE_MODEL_RESTORE_FILE".%u", dom);
+    ERROR("XXH: %s fopen %s\n", __func__, path);
     fp = fopen(path, "wb");
     if ( !fp )
         return -1;
@@ -1001,6 +1003,8 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
             PERROR("error read the ioreq server gmfn base");
             return -1;
         }
+        fprintf(stderr, "XXH: %s(): reading XC_SAVE_ID_HVM_IOREQ_SERVER_PFN base:0x%llx\n",
+                __func__, (unsigned long long)buf->ioreq_server_pfn);
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     case XC_SAVE_ID_HVM_NR_IOREQ_SERVER_PAGES:
@@ -1011,6 +1015,8 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
             PERROR("error read the ioreq server gmfn count");
             return -1;
         }
+        fprintf(stderr, "XXH: %s(): reading XC_SAVE_ID_HVM_NR_IOREQ_SERVER_PAGES pages:%llu \n",
+                __func__, (unsigned long long)buf->nr_ioreq_server_pages);
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     default:
@@ -1502,7 +1508,26 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     struct restore_ctx *ctx = &_ctx;
     struct domain_info_context *dinfo = &ctx->dinfo;
 
-    DPRINTF("%s: starting restore of new domid %u", __func__, dom);
+    int vgt_ha_fd = -1;
+    char vgt_ha_ctl_file[256];
+    int is_vgt = 0;
+
+    fprintf(stderr, "%s: starting restore of new domid %u", __func__, dom);
+
+    sprintf(vgt_ha_ctl_file, "/sys/kernel/vgt/control/ha_ctl");
+    vgt_ha_fd = open(vgt_ha_ctl_file, O_RDWR);
+    if (vgt_ha_fd == -1) {
+        fprintf(stderr, "Can't open vgt ctl file: %s\n", strerror(errno));
+        is_vgt = 0;
+    }
+    else
+        is_vgt = 1;
+    if (is_vgt) {
+	char *vgt_ha_cmd = "prepare";
+	if (write_exact(vgt_ha_fd, vgt_ha_cmd, sizeof(vgt_ha_cmd))) {
+	    ERROR("XXH: write vgt ctl file: %s\n", strerror(errno));
+	}
+    }
 
     pagebuf_init(&pagebuf);
     memset(&tailbuf, 0, sizeof(tailbuf));
@@ -1767,10 +1792,17 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     } else {
         if (pagebuf.nr_ioreq_server_pages != 0 &&
             pagebuf.ioreq_server_pfn != 0) {
+            fprintf(stderr, "XXH: %s(): Set ioreq_server w/ PAGES:0x%llu; PFN:0x%llx\n",
+                __func__, (unsigned long long)pagebuf.nr_ioreq_server_pages,
+                (unsigned long long)pagebuf.ioreq_server_pfn);
             xc_hvm_param_set(xch, dom, HVM_PARAM_NR_IOREQ_SERVER_PAGES,
                              pagebuf.nr_ioreq_server_pages);
             xc_hvm_param_set(xch, dom, HVM_PARAM_IOREQ_SERVER_PFN,
                              pagebuf.ioreq_server_pfn);
+        }
+        else {
+            fprintf(stderr, "XXH: %s(): No secondary emulator support for the restoring image!!!\n",
+                    __func__);
         }
     }
 
@@ -2213,6 +2245,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     memcpy(shared_info_page, tailbuf.u.pv.shared_info_page, PAGE_SIZE);
 
     DPRINTF("Completed checkpoint load\n");
+    ERROR("XXH: Completed checkpoint load\n");
 
     /* Restore contents of shared-info page. No checking needed. */
     new_shared_info = xc_map_foreign_range(
@@ -2287,6 +2320,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     {
         if ( callbacks != NULL && callbacks->toolstack_restore != NULL )
         {
+            ERROR("XXH: toolstack_restore\n");
             frc = callbacks->toolstack_restore(dom, tdata.data, tdata.len,
                                                callbacks->data);
             free(tdata.data);

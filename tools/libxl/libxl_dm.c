@@ -447,6 +447,7 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
     uint64_t ram_size;
     const char *path, *chardev;
 
+    LOG(ERROR, "XXH: %s start\n", __func__);
     dm_args = flexarray_make(gc, 16, 1);
 
     flexarray_vappend(dm_args, dm,
@@ -1048,6 +1049,7 @@ void libxl__spawn_stub_dm(libxl__egc *egc, libxl__stub_dm_spawn_state *sdss)
     libxl__domain_build_state *const d_state = sdss->dm.build_state;
     libxl__domain_build_state *const stubdom_state = &sdss->dm_state;
 
+    LOG(ERROR, "XXH: %s start\n", __func__);
     if (guest_config->b_info.device_model_version !=
         LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN_TRADITIONAL) {
         ret = ERROR_INVAL;
@@ -1190,10 +1192,11 @@ static void spawn_stub_launch_dm(libxl__egc *egc,
     libxl__domain_build_state *const stubdom_state = &sdss->dm_state;
     uint32_t dm_domid = sdss->pvqemu.guest_domid;
 
+    LOG(ERROR, "XXH: %s start\n", __func__);
     if (ret) {
         LOG(ERROR, "error connecting disk devices");
         goto out;
-     }
+    }
 
     for (i = 0; i < dm_config->num_nics; i++) {
          /* We have to init the nic here, because we still haven't
@@ -1377,6 +1380,7 @@ void libxl__spawn_local_dm(libxl__egc *egc, libxl__dm_spawn_state *dmss)
     const char *dm;
     int dm_state_fd = -1;
 
+    LOG(ERROR, "XXH: %s start\n", __func__);
     if (libxl_defbool_val(b_info->device_model_stubdomain)) {
         abort();
     }
@@ -1473,10 +1477,12 @@ retry_transaction:
     spawn->detached_cb = device_model_detached;
 
     rc = libxl__spawn_spawn(egc, spawn);
+    LOG(ERROR, "XXH: libxl__spawn_spawn failed (rc=%d)\n", rc);
     if (rc < 0)
         goto out_close;
     if (!rc) { /* inner child */
         setsid();
+    	LOG(ERROR, "XXH: libxl__exec\n");
         libxl__exec(gc, null, logfile_w, logfile_w, dm, args, NULL);
     }
 
@@ -1497,6 +1503,7 @@ static void device_model_confirm(libxl__egc *egc, libxl__spawn_state *spawn,
 {
     STATE_AO_GC(spawn->ao);
 
+    fprintf(stderr, "XXH: %s start\n", __func__);
     if (!xsdata)
         return;
 
@@ -1510,6 +1517,7 @@ static void device_model_startup_failed(libxl__egc *egc,
                                         libxl__spawn_state *spawn)
 {
     libxl__dm_spawn_state *dmss = CONTAINER_OF(spawn, *dmss, spawn);
+    fprintf(stderr, "XXH: %s start\n", __func__);
     device_model_spawn_outcome(egc, dmss, ERROR_FAIL);
 }
 
@@ -1517,6 +1525,7 @@ static void device_model_detached(libxl__egc *egc,
                                   libxl__spawn_state *spawn)
 {
     libxl__dm_spawn_state *dmss = CONTAINER_OF(spawn, *dmss, spawn);
+    fprintf(stderr, "XXH: %s start\n", __func__);
     device_model_spawn_outcome(egc, dmss, 0);
 }
 

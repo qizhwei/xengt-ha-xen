@@ -843,6 +843,7 @@ static void p2m_pt_change_entry_type_global(struct p2m_domain *p2m,
     l1_pgentry_t *tab;
     unsigned long gfn = 0;
     unsigned int i, changed;
+    //dprintk(XENLOG_G_ERR, "XXH: %s() start!\n", __func__);
 
     if ( pagetable_get_pfn(p2m_get_pagetable(p2m)) == 0 )
         return;
@@ -1065,6 +1066,7 @@ long p2m_pt_audit_p2m(struct p2m_domain *p2m)
 /* Set up the p2m function pointers for pagetable format */
 void p2m_pt_init(struct p2m_domain *p2m)
 {
+    //dprintk(XENLOG_G_ERR, "XXH: %s() start!\n", __func__);
     p2m->set_entry = p2m_pt_set_entry;
     p2m->get_entry = p2m_pt_get_entry;
     p2m->change_entry_type_global = p2m_pt_change_entry_type_global;
