@@ -85,6 +85,7 @@ static void __domain_finalise_shutdown(struct domain *d)
             return;
 
     d->is_shut_down = 1;
+    dprintk(XENLOG_G_ERR, "XXH: %s %llu\n", __func__, (unsigned long long)NOW());
     if ( (d->shutdown_code == SHUTDOWN_suspend) && d->suspend_evtchn )
         evtchn_send(d, d->suspend_evtchn);
     else
@@ -727,6 +728,7 @@ void domain_resume(struct domain *d)
     spin_lock(&d->shutdown_lock);
 
     d->is_shutting_down = d->is_shut_down = 0;
+    dprintk(XENLOG_G_ERR, "XXH: %s %llu\n", __func__, (unsigned long long)NOW());
     d->shutdown_code = -1;
 
     for_each_vcpu ( d, v )

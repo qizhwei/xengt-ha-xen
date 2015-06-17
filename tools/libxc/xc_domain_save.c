@@ -42,7 +42,7 @@
 ** XXX SMH: should consider if want to be able to override MAX_MBIT_RATE too.
 **
 */
-#define DEF_MAX_ITERS   29   /* limit us to 30 times round loop   */
+#define DEF_MAX_ITERS   5   /* limit us to 30 times round loop   */
 #define DEF_MAX_FACTOR   3   /* never send more than 3x p2m_size  */
 
 struct save_ctx {
@@ -88,24 +88,6 @@ struct outbuf {
 #define SUPERPAGE_NR_PFNS    (1UL << SUPERPAGE_PFN_SHIFT)
 
 #define SUPER_PAGE_START(pfn)    (((pfn) & (SUPERPAGE_NR_PFNS-1)) == 0 )
-
-static uint64_t tv_to_us(struct timeval *new)
-{
-    return (new->tv_sec * 1000000) + new->tv_usec;
-}
-
-static uint64_t llgettimeofday(void)
-{
-    struct timeval now;
-    gettimeofday(&now, NULL);
-    return tv_to_us(&now);
-}
-
-static uint64_t tv_delta(struct timeval *new, struct timeval *old)
-{
-    return (((new->tv_sec - old->tv_sec)*1000000) +
-            (new->tv_usec - old->tv_usec));
-}
 
 static int noncached_write(xc_interface *xch,
                            struct outbuf* ob,
@@ -897,9 +879,16 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     int vgt_ha_fd = -1;
     char vgt_ha_cp_file[256];
     int is_vgt = 0;
+    int vgt_ha_state_fd = -1;
+    char vgt_ha_state_file[256];
+    const int size = 0x100000/8/sizeof(unsigned long);
+    int vgt_ha_bitmap_fd = -1;        
+    char vgt_ha_bitmap_file[256];  
+    unsigned long gm_bitmap[size]; 
+
 
     DPRINTF("%s: starting save of domid %u", __func__, dom);
-    ERROR("flag %d debug: %d live: %d superpages: %d %s\n", flags, debug, live, superpages, __TIME__);
+    ERROR("flag %d debug: %d live: %d superpages: %d %" PRIu64 "\n", flags, debug, live, superpages, llgettimeofday());
 
     if ( hvm && !callbacks->switch_qemu_logdirty )
     {
@@ -915,6 +904,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     /* If no explicit control parameters given, use defaults */
     max_iters  = max_iters  ? : DEF_MAX_ITERS;
     max_factor = max_factor ? : DEF_MAX_FACTOR;
+    ERROR("XXH: max_iters %d max_factor %d\n", max_iters, max_factor);
 
     if ( !get_platform_info(xch, dom,
                             &ctx->max_mfn, &ctx->hvirt_start, &ctx->pt_levels, &dinfo->guest_width) )
@@ -947,7 +937,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
     /* Get the size of the P2M table */
     dinfo->p2m_size = xc_domain_maximum_gpfn(xch, dom) + 1;
-    ERROR("p2msize %ld\n", dinfo->p2m_size);
+    ERROR("p2msize %lx\n", dinfo->p2m_size);
 
     if ( dinfo->p2m_size > ~XEN_DOMCTL_PFINFO_LTAB_MASK )
     {
@@ -962,8 +952,11 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         fprintf(stderr, "Can't open vgt ha file: %s\n", strerror(errno));
         is_vgt = 0;
     }
-    else
-        is_vgt = 1;
+    else {
+	    is_vgt = 1;
+	    sprintf(vgt_ha_bitmap_file, "/sys/kernel/debug/vgt/vm%u/ha_gm_bitmap", dom);
+	    sprintf(vgt_ha_state_file, "/sys/kernel/debug/vgt/vm%u/ha_state", dom);
+    }
 
     /* Domain is still running at this point */
     if ( live )
@@ -973,12 +966,14 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                                XEN_DOMCTL_SHADOW_OP_ENABLE_LOGDIRTY,
                                NULL, 0, NULL, 0, NULL) < 0 )
         {
+            ERROR("XEN_DOMCTL_SHADOW_OP_OFF\n");
             /* log-dirty already enabled? There's no test op,
                so attempt to disable then reenable it */
             frc = xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_OFF,
                                     NULL, 0, NULL, 0, NULL);
             if ( frc >= 0 )
             {
+                ERROR("XEN_DOMCTL_SHADOW_OP_ENABLE_LOGDIRTY\n");
                 frc = xc_shadow_control(xch, dom,
                                         XEN_DOMCTL_SHADOW_OP_ENABLE_LOGDIRTY,
                                         NULL, 0, NULL, 0, NULL);
@@ -1008,29 +1003,35 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             ERROR("Domain appears not to have suspended");
             goto out;
         }
-        ERROR("XXH: suspend end! start save vgt info %s\n", __TIME__);
-        if (is_vgt) {
-            char *vgt_ha_cmd = "save";
-	    char buffer[16];
-	    int ch = 0;
-	    if (write_exact(vgt_ha_fd, vgt_ha_cmd, sizeof(vgt_ha_cmd))) {
-	        ERROR("XXH: write vgt ha file: %s\n", strerror(errno));
-            }
-	    while (ch < 100) {
-	        if (read_exact(vgt_ha_fd, buffer, sizeof(int))) {
-	            ERROR("XXH: read vgt ha file: %s\n", strerror(errno));
-                }
-		ch++;
-	        ERROR("XXH: %d read vgt ha file: %s\n", ch, buffer);
-		if (atoi(buffer)) {
-		    ERROR("XXH: saving! ret=1 returned!\n");
-		    sleep(1);
-		} else {
-		    ERROR("XXH: save done! ret=0 returned! %s\n", __TIME__);
-		    break;
+	ERROR("XXH: suspend end! start save vgt info %" PRIu64 "\n", llgettimeofday());
+	if (is_vgt) {
+		char *vgt_ha_cmd = "save";
+		char buffer[16];
+		unsigned int ch = 0, saving_ret;
+		if (write_exact(vgt_ha_fd, vgt_ha_cmd, sizeof(vgt_ha_cmd))) {
+			ERROR("XXH: write vgt ha file: %s\n", strerror(errno));
 		}
-	    }
-        }
+		while (ch < 100) {
+			vgt_ha_state_fd = open(vgt_ha_state_file, O_RDONLY);
+			if (vgt_ha_state_fd == -1) {
+				fprintf(stderr, "Can't open vgt ha state file: %s\n", strerror(errno));
+			}
+			if (read_exact(vgt_ha_state_fd, buffer, sizeof(unsigned int))) {
+				ERROR("XXH: read vgt ha file: %s\n", strerror(errno));
+			}
+			close(vgt_ha_state_fd);
+			ch++;
+			saving_ret = atoi(buffer);
+			ERROR("XXH: %d read vgt ha file: %d\n", ch, saving_ret);
+			if (saving_ret) {
+				ERROR("XXH: saving! ret=%d returned!\n", saving_ret);
+				sleep(1);
+			} else {
+				ERROR("XXH: save done! ret=0 returned! %" PRIu64 "\n", llgettimeofday());
+				break;
+			}
+		}
+	}
     }
 
     if ( flags & XCFLAGS_CHECKPOINT_COMPRESS )
@@ -1052,7 +1053,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     to_send = xc_hypercall_buffer_alloc_pages(xch, to_send, NRPAGES(bitmap_size(dinfo->p2m_size)));
     to_skip = xc_hypercall_buffer_alloc_pages(xch, to_skip, NRPAGES(bitmap_size(dinfo->p2m_size)));
     to_fix  = calloc(1, bitmap_size(dinfo->p2m_size));
-    ERROR("nrpages %ld\n", NRPAGES(bitmap_size(dinfo->p2m_size)));
+    ERROR("nrpages %ld fix_size %d\n", NRPAGES(bitmap_size(dinfo->p2m_size)), bitmap_size(dinfo->p2m_size));
 
     if ( !to_send || !to_fix || !to_skip )
     {
@@ -1162,14 +1163,29 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     /* Now write out each data page, canonicalising page tables as we go... */
     for ( ; ; )
     {
+	int pos = 0, cnt = 0, rct;
         unsigned int N, batch, run;
         char reportbuf[80];
+	unsigned long to_send_cnt = 0;
 
         snprintf(reportbuf, sizeof(reportbuf),
                  "Saving memory: iter %d (last sent %u skipped %u)",
                  iter, sent_this_iter, skip_this_iter);
 
         xc_report_progress_start(xch, reportbuf, dinfo->p2m_size);
+
+	if (is_vgt) {
+		vgt_ha_bitmap_fd = open(vgt_ha_bitmap_file, O_RDONLY);
+		if (vgt_ha_bitmap_fd == -1) {
+			fprintf(stderr, "Can't open vgt ha bitmap file: %s\n", strerror(errno));
+		}
+		rct = read(vgt_ha_bitmap_fd, &gm_bitmap, size*sizeof(unsigned long));
+		for (pos = 0; pos < 0x100000; pos++)
+			if (test_bit(pos, gm_bitmap))
+				cnt ++;
+		ERROR("XXH: gm bitmap set cnt %x\n", cnt);
+		close(vgt_ha_bitmap_fd);
+	}
 
         iter++;
         sent_this_iter = 0;
@@ -1182,6 +1198,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
             if ( !last_iter )
             {
+	        //unsigned long to_skip_cnt = 0;
                 /* Slightly wasteful to peek the whole array every time,
                    but this is fast enough for the moment. */
                 frc = xc_shadow_control(
@@ -1192,6 +1209,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                     ERROR("Error peeking shadow bitmap");
                     goto out;
                 }
+		/*for (j = 0; j < dinfo->p2m_size; j++)
+			if (test_bit(j, to_skip))
+				to_skip_cnt++;
+                ERROR("XXH: to_skip_cnt %lu\n", to_skip_cnt);*/
             }
 
             /* load pfn_type[] with the mfn of all the pages we're doing in
@@ -1202,20 +1223,23 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             {
                 int n = N;
 
+		if (n >= 0xfeff0 && n <= 0xfeff1)
+		    ERROR("XXH: gfn %x loop start!\n", n);
                 if ( debug )
                 {
-                    DPRINTF("%d pfn= %08lx mfn= %08lx %d",
+                    ERROR("%d pfn= %08lx mfn= %08lx %d",
                             iter, (unsigned long)n,
                             hvm ? 0 : pfn_to_mfn(n),
                             test_bit(n, to_send));
                     if ( !hvm && is_mapped(pfn_to_mfn(n)) )
-                        DPRINTF("  [mfn]= %08lx",
+                        ERROR("  [mfn]= %08lx",
                                 mfn_to_pfn(pfn_to_mfn(n)&0xFFFFF));
-                    DPRINTF("\n");
+                    ERROR("\n");
                 }
 
                 if ( completed )
                 {
+		    ERROR("XXH: in complete!\n");
                     /* for sparse bitmaps, word-by-word may save time */
                     if ( !to_send[N >> ORDER_LONG] )
                     {
@@ -1244,7 +1268,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
                     if ( !((test_bit(n, to_send) && !test_bit(n, to_skip)) ||
                            (test_bit(n, to_send) && dont_skip) ||
-                           (test_bit(n, to_fix)  && last_iter)) )
+                           (test_bit(n, to_fix)  && last_iter) ||
+			   test_bit(n, gm_bitmap) ||
+			   (last_iter && is_vgt && n >= 0xfeff0 && n <= 0xfeff1)
+			  ) )
                         continue;
 
                     /* First time through, try to keep superpages in the same batch */
@@ -1258,9 +1285,13 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                     **  1. page is marked to_send & hasn't already been re-dirtied
                     **  2. (ignore to_skip in first and last iterations)
                     **  3. add in pages that still need fixup (net bufs)
+                    **  4. in graphics memory space
+                    **  5. vgt ioreq server gfn
                     */
 
                     pfn_batch[batch] = n;
+		    if (n >= 0xffef0 && n <= 0xffef1)
+		        ERROR("XXH: gfn %x in!\n", n);
 
                     /* Hypercall interfaces operate in PFNs for HVM guests
                      * and MFNs for PV guests */
@@ -1277,6 +1308,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                         ** unless its sent sooner anyhow, or it never enters
                         ** pseudo-physical map (e.g. for ballooned down doms)
                         */
+		        ERROR("XXH: gfn %lx is not mapped!\n", pfn_type[batch]);
                         set_bit(n, to_fix);
                         continue;
                     }
@@ -1286,7 +1318,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                          !test_bit(n, to_send) )
                     {
                         needed_to_fix++;
-                        DPRINTF("Fix! iter %d, pfn %x. mfn %lx\n",
+                        ERROR("Fix! iter %d, pfn %x. mfn %lx\n",
                                 iter, n, pfn_type[batch]);
                     }
 
@@ -1333,7 +1365,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                     if ( pfn_type[j] == XEN_DOMCTL_PFINFO_XTAB )
                         continue;
 
-                    DPRINTF("map fail: page %i mfn %08lx err %d\n",
+                    ERROR("map fail: page %i mfn %08lx err %d\n",
                             j, gmfn, pfn_err[j]);
                     pfn_type[j] = XEN_DOMCTL_PFINFO_XTAB;
                     continue;
@@ -1341,7 +1373,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
                 if ( pfn_type[j] == XEN_DOMCTL_PFINFO_XTAB )
                 {
-                    DPRINTF("type fail: page %i mfn %08lx\n", j, gmfn);
+                    ERROR("type fail: page %i mfn %08lx\n", j, gmfn);
                     continue;
                 }
 
@@ -1355,12 +1387,12 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                 if ( debug )
                 {
                     if ( hvm )
-                        DPRINTF("%d pfn=%08lx sum=%08lx\n",
+                        ERROR("%d pfn=%08lx sum=%08lx\n",
                                 iter,
                                 pfn_type[j],
                                 csum_page(region_base + (PAGE_SIZE*j)));
                     else
-                        DPRINTF("%d pfn= %08lx mfn= %08lx [mfn]= %08lx"
+                        ERROR("%d pfn= %08lx mfn= %08lx [mfn]= %08lx"
                                 " sum= %08lx\n",
                                 iter,
                                 pfn_type[j],
@@ -1551,9 +1583,9 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         {
             print_stats( xch, dom, sent_this_iter, &time_stats, &shadow_stats, 1);
 
-            DPRINTF("Total pages sent= %ld (%.2fx)\n",
+            ERROR("Total pages sent= %ld (%.2fx)\n",
                     total_sent, ((float)total_sent)/dinfo->p2m_size );
-            DPRINTF("(of which %ld were fixups)\n", needed_to_fix  );
+            ERROR("(of which %ld were fixups)\n", needed_to_fix  );
         }
 
         if ( last_iter && debug )
@@ -1561,7 +1593,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             int id = XC_SAVE_ID_ENABLE_VERIFY_MODE;
             memset(to_send, 0xff, bitmap_size(dinfo->p2m_size));
             debug = 0;
-            DPRINTF("Entering debug resend-all mode\n");
+            ERROR("Entering debug resend-all mode\n");
 
             /* send "-1" to put receiver into debug mode */
             if ( wrexact(io_fd, &id, sizeof(int)) )
@@ -1578,11 +1610,15 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         if ( live )
         {
-            if ( (iter >= max_iters) ||
+	    /* XXH: dead loop here and make a stop for every ST time */
+	    //if (total_sent > dinfo->p2m_size*max_factor)
+	    if (iter >= max_iters)
+	    /* old condition */
+            /*if ( (iter >= max_iters) ||
                  (sent_this_iter+skip_this_iter < 50) ||
-                 (total_sent > dinfo->p2m_size*max_factor) )
+                 (total_sent > dinfo->p2m_size*max_factor) )*/
             {
-                DPRINTF("Start last iteration\n");
+                ERROR("Start last iteration\n");
                 last_iter = 1;
 
                 if ( suspend_and_state(callbacks->suspend, callbacks->data,
@@ -1592,7 +1628,38 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                     goto out;
                 }
 
-                DPRINTF("SUSPEND shinfo %08lx\n", info.shared_info_frame);
+		ERROR("XXH: suspend end! start save vgt info %" PRIu64 "\n", llgettimeofday());
+		if (is_vgt) {
+			char *vgt_ha_cmd = "save";
+			char buffer[16];
+			unsigned int ch = 0, saving_ret;
+			if (write_exact(vgt_ha_fd, vgt_ha_cmd, sizeof(vgt_ha_cmd))) {
+				ERROR("XXH: write vgt ha file: %s\n", strerror(errno));
+			}
+			while (ch < 100) {
+				sleep(1);
+				vgt_ha_state_fd = open(vgt_ha_state_file, O_RDONLY);
+				if (vgt_ha_state_fd == -1) {
+					fprintf(stderr, "Can't open vgt ha state file: %s\n", strerror(errno));
+				}
+				if (read_exact(vgt_ha_state_fd, buffer, sizeof(unsigned int))) {
+					ERROR("XXH: read vgt ha file: %s\n", strerror(errno));
+				}
+				close(vgt_ha_state_fd);
+				ch++;
+				saving_ret = atoi(buffer);
+				ERROR("XXH: %d read vgt ha file: %d\n", ch, saving_ret);
+				if (saving_ret) {
+					ERROR("XXH: saving! ret=%d returned!\n", saving_ret);
+					//sleep(1);
+				} else {
+					ERROR("XXH: save done! ret=0 returned! %" PRIu64 "\n", llgettimeofday());
+					break;
+				}
+			}
+		}
+
+                ERROR("SUSPEND shinfo %08lx\n", info.shared_info_frame);
                 if ( (tmem_saved > 0) &&
                      (xc_tmem_save_extra(xch,dom,io_fd,XC_SAVE_ID_TMEM_EXTRA) == -1) )
                 {
@@ -1619,12 +1686,19 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
             sent_last_iter = sent_this_iter;
 
+	    // XXH: do saving for every 2 seconds
+	    for (j = 0; j < dinfo->p2m_size; j++)
+	        if (test_bit(j, to_send))
+		    to_send_cnt++;
+            ERROR("XXH: total_sent %lu next to_send bit cnt %lu sent_last_iter %u\n", total_sent, to_send_cnt, sent_last_iter);
+	    sleep(2);
+
             print_stats(xch, dom, sent_this_iter, &time_stats, &shadow_stats, 1);
 
         }
     } /* end of infinite for loop */
 
-    DPRINTF("All memory is saved\n");
+    ERROR("XXH: All memory is saved %llu\n", (unsigned long long)llgettimeofday());
 
     /* After last_iter, buffer the rest of pagebuf & tailbuf data into a
      * separate output buffer and flush it after the compressed page chunks.
@@ -2168,7 +2242,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             ERROR("Domain appears not to have suspended");
             goto out;
         }
-        DPRINTF("SUSPEND shinfo %08lx\n", info.shared_info_frame);
+        ERROR("SUSPEND shinfo %08lx\n", info.shared_info_frame);
         print_stats(xch, dom, 0, &time_stats, &shadow_stats, 1);
 
         if ( xc_shadow_control(xch, dom,
@@ -2178,6 +2252,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             PERROR("Error flushing shadow PT");
         }
 
+        ERROR("XXH: %s %" PRIu64 " goto copypages\n", __func__, llgettimeofday());
         goto copypages;
     }
 
@@ -2189,9 +2264,9 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         if ( xc_shadow_control(xch, dom, 
                                XEN_DOMCTL_SHADOW_OP_OFF,
                                NULL, 0, NULL, 0, NULL) < 0 )
-            DPRINTF("Warning - couldn't disable shadow mode");
+            ERROR("Warning - couldn't disable shadow mode");
         if ( hvm && callbacks->switch_qemu_logdirty(dom, 0, callbacks->data) )
-            DPRINTF("Warning - couldn't disable qemu log-dirty mode");
+            ERROR("Warning - couldn't disable qemu log-dirty mode");
     }
 
     if (compress_ctx)
@@ -2218,7 +2293,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
     errno = rc;
 exit:
-    DPRINTF("Save exit of domid %u with errno=%d\n", dom, errno);
+    ERROR("Save exit of domid %u with errno=%d\n", dom, errno);
 
     return !!errno;
 }

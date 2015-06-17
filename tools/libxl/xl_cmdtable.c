@@ -148,6 +148,7 @@ struct cmd_spec cmd_table[] = {
       "Save a domain state to restore later",
       "[options] <Domain> <CheckpointFile> [<ConfigFile>]",
       "-h  Print this help.\n"
+      "-l  Start a log-dirty mode save.\n"
       "-c  Leave domain running after creating the snapshot.\n"
       "-p  Leave domain paused after creating the snapshot."
     },

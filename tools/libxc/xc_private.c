@@ -887,6 +887,24 @@ int xc_ffs64(uint64_t x)
     return l ? xc_ffs32(l) : h ? xc_ffs32(h) + 32 : 0;
 }
 
+uint64_t tv_to_us(struct timeval *new)
+{
+    return (new->tv_sec * 1000000) + new->tv_usec;
+}
+
+uint64_t tv_delta(struct timeval *new, struct timeval *old)
+{
+    return (((new->tv_sec - old->tv_sec)*1000000) +
+            (new->tv_usec - old->tv_usec));
+}
+
+uint64_t llgettimeofday(void)
+{
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    return tv_to_us(&now);
+}
+
 /*
  * Local variables:
  * mode: C

@@ -2805,6 +2805,7 @@ static int def_getopt(int argc, char * const argv[],
         return opt;
 
     if (argc - optind <= reqargs - 1) {
+        fprintf(stderr, "argc %d opind %d reqargs %d\n", argc, optind, reqargs);
         fprintf(stderr, "'xl %s' requires at least %d argument%s.\n\n",
                 helpstr, reqargs, reqargs > 1 ? "s" : "");
         help(helpstr);
@@ -3708,7 +3709,7 @@ static void save_domain_core_writeconfig(int fd, const char *source,
 }
 
 static int save_domain(uint32_t domid, const char *filename, int checkpoint,
-                            int leavepaused, const char *override_config_file)
+                            int leavepaused, int logdirty, const char *override_config_file)
 {
     int fd;
     uint8_t *config_data;
@@ -3739,21 +3740,24 @@ static int save_domain(uint32_t domid, const char *filename, int checkpoint,
         is_vgt = 0;
     }
     else {
-        fprintf(stderr, "open vgt ha file: %s %s\n", strerror(errno), __TIME__);
+        fprintf(stderr, "open vgt ha file: %s \n", strerror(errno));
         is_vgt = 1;
     }
 
-    int rc = libxl_domain_suspend(ctx, domid, fd, 0, NULL);
+    int flag = 0;
+    if (logdirty)
+        flag |= LIBXL_SUSPEND_LIVE;
+    int rc = libxl_domain_suspend(ctx, domid, fd, flag, NULL);
     close(fd);
-    fprintf(stderr, "XXH: %s libxl_domain_suspend end %s\n", __func__, __TIME__);
+    fprintf(stderr, "XXH: %s %llu libxl_domain_suspend end\n", __func__, (unsigned long long)llgettimeofday());
 
     if (rc < 0) {
         fprintf(stderr, "Failed to save domain, resuming domain\n");
         libxl_domain_resume(ctx, domid, 1, 0);
     }
-    else if (leavepaused || checkpoint) {
+    else if (leavepaused || checkpoint || logdirty) {
         if (is_vgt) {
-            char *vgt_ha_cmd = "ioreq_server_enable";
+            char *vgt_ha_cmd = "ioreq";
             fprintf(stderr, "XXH: enable ioreq_server\n");
 	    if (write_exact(vgt_ha_fd, vgt_ha_cmd, sizeof(vgt_ha_cmd))) {
 	        fprintf(stderr, "XXH: write vgt ha file: %s\n", strerror(errno));
@@ -4298,18 +4302,22 @@ int main_save(int argc, char **argv)
     const char *config_filename = NULL;
     int checkpoint = 0;
     int leavepaused = 0;
+    int logdirty = 0;
     int opt;
 
-    SWITCH_FOREACH_OPT(opt, "cp", NULL, "save", 2) {
+    SWITCH_FOREACH_OPT(opt, "cpl", NULL, "save", 2) {
     case 'c':
         checkpoint = 1;
         break;
     case 'p':
         leavepaused = 1;
         break;
+    case 'l':
+        logdirty = 1;
+        break;
     }
 
-    if (argc-optind > 3) {
+    if (argc - optind > 3) {
         help("save");
         return 2;
     }
@@ -4319,7 +4327,7 @@ int main_save(int argc, char **argv)
     if ( argc - optind >= 3 )
         config_filename = argv[optind + 2];
 
-    save_domain(domid, filename, checkpoint, leavepaused, config_filename);
+    save_domain(domid, filename, checkpoint, leavepaused, logdirty, config_filename);
     return 0;
 }
 

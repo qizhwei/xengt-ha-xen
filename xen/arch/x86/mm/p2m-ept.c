@@ -1191,7 +1191,7 @@ static void ept_partial_dump_p2m_table(unsigned char key)
 
         p2m = p2m_get_hostp2m(d);
         ept = &p2m->ept;
-        printk("\nZD domain%d partial EPT p2m table:\n", d->domain_id);
+        printk("\ndomain%d partial EPT p2m table:\n", d->domain_id);
 
         for ( gfn = 0xfc000UL; gfn <= p2m->max_mapped_pfn; gfn += 1UL << order )
         {

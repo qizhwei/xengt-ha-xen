@@ -1118,8 +1118,6 @@ int
 guest_physmap_mark_populate_on_demand(struct domain *d, unsigned long gfn,
                                       unsigned int order)
 {
-    /*ZD NOTE here: for allocing pfn physical memory,
-                    what the flag pop_on_demand means?*/
     struct p2m_domain *p2m = p2m_get_hostp2m(d);
     unsigned long i, pod_count = 0;
     p2m_type_t ot;

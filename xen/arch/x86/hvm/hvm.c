@@ -400,7 +400,7 @@ bool_t hvm_io_pending(struct vcpu *v)
 
 static bool_t hvm_wait_for_io(struct hvm_ioreq_vcpu *sv, ioreq_t *p)
 {
-    /* ZD NOTE: ioreq-server sending should-be-emulated ioreqs from here? */
+    /* XXH ioreq-server sending should-be-emulated ioreqs from here? */
     /* NB. Optimised for common case (p->state == STATE_IOREQ_NONE). */
     while ( p->state != STATE_IOREQ_NONE )
     {
@@ -911,19 +911,8 @@ static void hvm_ioreq_server_enable(struct hvm_ioreq_server *s,
 
     if ( !is_default )
     {
-        /* ZD NOTE the page for this ioreq server is removed here!*/
-        /* this shared page is for passing emulation req/res, its removed
-        *   from the guest's memory space(cannot be lookup from guest's ept table)
-        *   before ioreq-server enabled. The page is remapped in dm domain
-        *   (dom0's xengt driver, in this case), so the following code does NOT
-        *   really deallocate the physical page usage, just cannot be accessed
-        *   through ioreq-gmfn for the corresponding guest domain.
-        */
-        /* what if we bypass remove_gmfn for vgt's ioreq-server? */
-#define ZD_VGT_TRY 1
-#if ZD_VGT_TRY
         hvm_remove_ioreq_gmfn(d, &s->ioreq);
-#endif
+
         if ( handle_bufioreq )
             hvm_remove_ioreq_gmfn(d, &s->bufioreq);
     }
@@ -5796,8 +5785,8 @@ long do_hvm_op(unsigned long op, XEN_GUEST_HANDLE_PARAM(void) arg)
                     break;
                 }
                 d->arch.hvm_domain.ioreq_gmfn.base = a.value;
-                dprintk(XENLOG_G_ERR, "XXH: %s(): HVM_PARAM_IOREQ_SERVER_PFN, set base=%lu\n",
-                    __func__, a.value);
+                dprintk(XENLOG_G_ERR, "XXH: %s(): HVM_PARAM_IOREQ_SERVER_PFN, set base=%llx\n",
+                    __func__, (unsigned long long)a.value);
                 break;
             case HVM_PARAM_NR_IOREQ_SERVER_PAGES:
             {

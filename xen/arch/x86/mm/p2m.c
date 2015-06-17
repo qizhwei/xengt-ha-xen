@@ -567,8 +567,6 @@ p2m_remove_page(struct p2m_domain *p2m, unsigned long gfn, unsigned long mfn,
     p2m_type_t t;
     p2m_access_t a;
 
-    /* ZD NOTE: the following if condition are for mmio addresses which are not translated? 
-            (according to my evernote (mailing list)) */
     if ( !paging_mode_translate(p2m->domain) )
     {
         if ( need_iommu(p2m->domain) )
@@ -737,7 +735,6 @@ guest_physmap_add_entry(struct domain *d, unsigned long gfn,
         }
     }
 
-    /*ZD NOTE here */
     /* Now, actually do the two-way mapping */
     if ( mfn_valid(_mfn(mfn)) ) 
     {

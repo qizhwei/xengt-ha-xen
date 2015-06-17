@@ -17,6 +17,10 @@
 #ifndef XC_PRIVATE_H
 #define XC_PRIVATE_H
 
+#include <time.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -435,4 +439,7 @@ int xc_mem_event_memop(xc_interface *xch, domid_t domain_id,
 void *xc_mem_event_enable(xc_interface *xch, domid_t domain_id, int param,
                           uint32_t *port, int enable_introspection);
 
+uint64_t tv_to_us(struct timeval *new);
+uint64_t tv_delta(struct timeval *new, struct timeval *old);
+uint64_t llgettimeofday(void);
 #endif /* __XC_PRIVATE_H__ */
