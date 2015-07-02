@@ -168,8 +168,8 @@ static int toolstack_save_cb(uint32_t domid, uint8_t **buf,
 
     assert(toolstack_save_fd > 0);
 
-    /* This is a hack for remus */
-    if (helper_save_callbacks.checkpoint) {
+    /* This is a hack for remus & XXH ha*/
+    if (helper_save_callbacks.checkpoint || helper_save_callbacks.postcopy) {
         r = lseek(toolstack_save_fd, 0, SEEK_SET);
         if (r) fail(errno,"rewind toolstack data tmpfile");
     }

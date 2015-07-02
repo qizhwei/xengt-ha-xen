@@ -3744,9 +3744,10 @@ static int save_domain(uint32_t domid, const char *filename, int checkpoint,
         is_vgt = 1;
     }
 
+    fprintf(stderr, "XXH: %s %llu libxl_domain_suspend start ctx %p\n", __func__, (unsigned long long)llgettimeofday(), ctx);
     int flag = 0;
     if (logdirty)
-        flag |= LIBXL_SUSPEND_LIVE;
+        flag |= LIBXL_SUSPEND_LIVE | LIBXL_SUSPEND_HA;
     int rc = libxl_domain_suspend(ctx, domid, fd, flag, NULL);
     close(fd);
     fprintf(stderr, "XXH: %s %llu libxl_domain_suspend end\n", __func__, (unsigned long long)llgettimeofday());

@@ -42,8 +42,9 @@
 ** XXX SMH: should consider if want to be able to override MAX_MBIT_RATE too.
 **
 */
-#define DEF_MAX_ITERS   5   /* limit us to 30 times round loop   */
+#define DEF_MAX_ITERS   30   /* limit us to 30 times round loop   */
 #define DEF_MAX_FACTOR   3   /* never send more than 3x p2m_size  */
+#define HA_MAX_COUNTS 3
 
 struct save_ctx {
     unsigned long hvirt_start; /* virtual starting address of the hypervisor */
@@ -789,9 +790,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     xc_dominfo_t info;
     DECLARE_DOMCTL;
 
-    int rc, frc, i, j, last_iter = 0, iter = 0;
+    int rc, frc, i, j, last_iter = 0, iter = 0, ha_iter = 0, just_set = 0;
     int live  = (flags & XCFLAGS_LIVE);
     int debug = (flags & XCFLAGS_DEBUG);
+    int ha = (flags & XCFLAGS_HA);
     int superpages = !!hvm;
     int race = 0, sent_last_iter, skip_this_iter = 0;
     unsigned int sent_this_iter = 0;
@@ -885,10 +887,11 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     int vgt_ha_bitmap_fd = -1;        
     char vgt_ha_bitmap_file[256];  
     unsigned long gm_bitmap[size]; 
+    off_t last_seek_pos;
 
 
     DPRINTF("%s: starting save of domid %u", __func__, dom);
-    ERROR("flag %d debug: %d live: %d superpages: %d %" PRIu64 "\n", flags, debug, live, superpages, llgettimeofday());
+    ERROR("flag %d debug: %d live: %d ha: %d superpages: %d %" PRIu64 "\n", flags, debug, live, ha, superpages, llgettimeofday());
 
     if ( hvm && !callbacks->switch_qemu_logdirty )
     {
@@ -903,6 +906,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
     /* If no explicit control parameters given, use defaults */
     max_iters  = max_iters  ? : DEF_MAX_ITERS;
+    if (ha)
+       max_iters = 2;
     max_factor = max_factor ? : DEF_MAX_FACTOR;
     ERROR("XXH: max_iters %d max_factor %d\n", max_iters, max_factor);
 
@@ -949,8 +954,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     sprintf(vgt_ha_cp_file, "/sys/kernel/debug/vgt/vm%u/ha_checkpoint", dom);
     vgt_ha_fd = open(vgt_ha_cp_file, O_RDWR);
     if (vgt_ha_fd == -1) {
-        fprintf(stderr, "Can't open vgt ha file: %s\n", strerror(errno));
-        is_vgt = 0;
+	    fprintf(stderr, "Can't open vgt ha file: %s\n", strerror(errno));
+	    is_vgt = 0;
     }
     else {
 	    is_vgt = 1;
@@ -1011,6 +1016,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 		if (write_exact(vgt_ha_fd, vgt_ha_cmd, sizeof(vgt_ha_cmd))) {
 			ERROR("XXH: write vgt ha file: %s\n", strerror(errno));
 		}
+		close(vgt_ha_fd);
 		while (ch < 100) {
 			vgt_ha_state_fd = open(vgt_ha_state_file, O_RDONLY);
 			if (vgt_ha_state_fd == -1) {
@@ -1166,7 +1172,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 	int pos = 0, cnt = 0, rct;
         unsigned int N, batch, run;
         char reportbuf[80];
-	unsigned long to_send_cnt = 0;
+	//unsigned long to_send_cnt = 0;
 
         snprintf(reportbuf, sizeof(reportbuf),
                  "Saving memory: iter %d (last sent %u skipped %u)",
@@ -1174,7 +1180,13 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         xc_report_progress_start(xch, reportbuf, dinfo->p2m_size);
 
-	if (is_vgt) {
+        iter++;
+        sent_this_iter = 0;
+        skip_this_iter = 0;
+        N = 0;
+
+        ERROR("XXH: iter %u start %lu\n", iter, llgettimeofday());
+	if (is_vgt && last_iter) {
 		vgt_ha_bitmap_fd = open(vgt_ha_bitmap_file, O_RDONLY);
 		if (vgt_ha_bitmap_fd == -1) {
 			fprintf(stderr, "Can't open vgt ha bitmap file: %s\n", strerror(errno));
@@ -1186,11 +1198,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 		ERROR("XXH: gm bitmap set cnt %x\n", cnt);
 		close(vgt_ha_bitmap_fd);
 	}
-
-        iter++;
-        sent_this_iter = 0;
-        skip_this_iter = 0;
-        N = 0;
 
         while ( N < dinfo->p2m_size )
         {
@@ -1223,8 +1230,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             {
                 int n = N;
 
-		if (n >= 0xfeff0 && n <= 0xfeff1)
-		    ERROR("XXH: gfn %x loop start!\n", n);
+		/*if (n >= 0xfeff0 && n <= 0xfeff1)
+		    ERROR("XXH: gfn %x loop start!\n", n);*/
                 if ( debug )
                 {
                     ERROR("%d pfn= %08lx mfn= %08lx %d",
@@ -1269,7 +1276,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                     if ( !((test_bit(n, to_send) && !test_bit(n, to_skip)) ||
                            (test_bit(n, to_send) && dont_skip) ||
                            (test_bit(n, to_fix)  && last_iter) ||
-			   test_bit(n, gm_bitmap) ||
+			   (last_iter && test_bit(n, gm_bitmap)) ||
 			   (last_iter && is_vgt && n >= 0xfeff0 && n <= 0xfeff1)
 			  ) )
                         continue;
@@ -1605,21 +1612,21 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             continue;
         }
 
+        if ( last_iter && ha )
+	    goto clean_shadow;
         if ( last_iter )
             break;
 
         if ( live )
         {
-	    /* XXH: dead loop here and make a stop for every ST time */
-	    //if (total_sent > dinfo->p2m_size*max_factor)
-	    if (iter >= max_iters)
-	    /* old condition */
-            /*if ( (iter >= max_iters) ||
+            if ( (iter > max_iters) ||
                  (sent_this_iter+skip_this_iter < 50) ||
-                 (total_sent > dinfo->p2m_size*max_factor) )*/
+                 (total_sent > dinfo->p2m_size*max_factor) )
             {
                 ERROR("Start last iteration\n");
                 last_iter = 1;
+		if (ha)
+			just_set = 1;
 
                 if ( suspend_and_state(callbacks->suspend, callbacks->data,
                                        xch, io_fd, dom, &info) )
@@ -1633,11 +1640,14 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 			char *vgt_ha_cmd = "save";
 			char buffer[16];
 			unsigned int ch = 0, saving_ret;
+
+			vgt_ha_fd = open(vgt_ha_cp_file, O_RDWR);
 			if (write_exact(vgt_ha_fd, vgt_ha_cmd, sizeof(vgt_ha_cmd))) {
 				ERROR("XXH: write vgt ha file: %s\n", strerror(errno));
 			}
+			close(vgt_ha_fd);
 			while (ch < 100) {
-				sleep(1);
+				//sleep(1);
 				vgt_ha_state_fd = open(vgt_ha_state_file, O_RDONLY);
 				if (vgt_ha_state_fd == -1) {
 					fprintf(stderr, "Can't open vgt ha state file: %s\n", strerror(errno));
@@ -1676,6 +1686,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
             }
 
+clean_shadow:
             if ( xc_shadow_control(xch, dom,
                                    XEN_DOMCTL_SHADOW_OP_CLEAN, HYPERCALL_BUFFER(to_send),
                                    dinfo->p2m_size, NULL, 0, &shadow_stats) != dinfo->p2m_size )
@@ -1687,17 +1698,24 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             sent_last_iter = sent_this_iter;
 
 	    // XXH: do saving for every 2 seconds
-	    for (j = 0; j < dinfo->p2m_size; j++)
+	    /*for (j = 0; j < dinfo->p2m_size; j++)
 	        if (test_bit(j, to_send))
 		    to_send_cnt++;
-            ERROR("XXH: total_sent %lu next to_send bit cnt %lu sent_last_iter %u\n", total_sent, to_send_cnt, sent_last_iter);
-	    sleep(2);
+            ERROR("XXH: total_sent %lu next to_send bit cnt %lu sent_last_iter %u %lu\n", total_sent, to_send_cnt, sent_last_iter, llgettimeofday());*/
+	    //sleep(2);
 
-            print_stats(xch, dom, sent_this_iter, &time_stats, &shadow_stats, 1);
+            print_stats(xch, dom, sent_this_iter, &time_stats, &shadow_stats, 0);
 
+	    if (last_iter && ha && !just_set)
+		    break;
+	    if (last_iter && ha && just_set)
+		    just_set = 0;
         }
     } /* end of infinite for loop */
 
+    /* XXH: flush to file & record pos*/
+    outbuf_flush(xch, ob, io_fd);
+    last_seek_pos = lseek(io_fd, 0, SEEK_CUR);
     ERROR("XXH: All memory is saved %llu\n", (unsigned long long)llgettimeofday());
 
     /* After last_iter, buffer the rest of pagebuf & tailbuf data into a
@@ -2186,6 +2204,30 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     /* Success! */
  success:
     rc = errno = 0;
+    if (ha && ha_iter < HA_MAX_COUNTS) {
+	    char *vgt_ha_cmd = "ioreq";
+	    fprintf(stderr, "XXH: success! goto outrc! ha iter %d\n", ha_iter);
+	    ha_iter++;
+	    if ( ob && outbuf_flush(xch, ob, io_fd) < 0 ) {
+		    PERROR("Error when flushing output buffer");
+		    if (!rc)
+			    rc = errno;
+	    }
+	    /*XXH: resume domu & goto copypages*/
+	    vgt_ha_fd = open(vgt_ha_cp_file, O_RDWR);
+	    if (write_exact(vgt_ha_fd, vgt_ha_cmd, sizeof(vgt_ha_cmd))) {
+		    fprintf(stderr, "XXH: write vgt ha file: %s\n", strerror(errno));
+	    }
+	    close(vgt_ha_fd);
+	    iter = 1;
+	    last_iter = 0;
+	    lseek(io_fd, last_seek_pos, SEEK_SET);
+	    fprintf(stderr, "XXH: domain %d resuming data %p\n", dom, callbacks->data);
+	    callbacks->postcopy(callbacks->data);
+	    fprintf(stderr, "XXH: domain %d resumed\n", dom);
+	    sleep(2);
+	    goto copypages;
+    }
     goto out_rc;
 
  out:
@@ -2194,7 +2236,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
  out_rc:
     completed = 1;
 
-    if ( !rc && callbacks->postcopy )
+    if ( !rc && callbacks->postcopy && !ha)
         callbacks->postcopy(callbacks->data);
 
     /* guest has been resumed. Now we can compress data
@@ -2202,6 +2244,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
      */
     if (!rc && compressing)
     {
+    	PERROR("XXH: outrc cp 1\n");
         ob = &ob_pagebuf;
         if (wrcompressed(io_fd) < 0)
         {
@@ -2216,6 +2259,9 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         }
     }
 
+    if (ob) {
+        PERROR("XXH: outrc cp 2\n");
+    }
     /* Flush last write and discard cache for file. */
     if ( ob && outbuf_flush(xch, ob, io_fd) < 0 ) {
         PERROR("Error when flushing output buffer");

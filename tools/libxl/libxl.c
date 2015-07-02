@@ -967,6 +967,7 @@ int libxl_domain_suspend(libxl_ctx *ctx, uint32_t domid, int fd, int flags,
     dss->type = type;
     dss->live = flags & LIBXL_SUSPEND_LIVE;
     dss->debug = flags & LIBXL_SUSPEND_DEBUG;
+    dss->ha = flags & LIBXL_SUSPEND_HA;
 
     libxl__domain_suspend(egc, dss);
     return AO_INPROGRESS;

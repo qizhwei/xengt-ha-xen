@@ -20,6 +20,7 @@
 
 #include "libxl_internal.h"
 #include "libxl_arch.h"
+#include "libxl.h"
 
 #include <xc_dom.h>
 #include <xen/hvm/hvm_info_table.h>
@@ -1413,20 +1414,6 @@ static void suspend_common_wait_guest_check(libxl__egc *egc,
     /* Convenience aliases */
     const uint32_t domid = dss->domid;
 
-    /*int j, nptrs;
-#define BTSIZE 100
-    void *buffer[BTSIZE];
-    char **strings;
-
-    nptrs = backtrace(buffer, BTSIZE);
-    fprintf(stderr, "XXH: backtrace() returned %d addresses\n", nptrs);
-    strings = backtrace_symbols(buffer, nptrs);
-    if (strings) {
-	    for (j = 0; j < nptrs; j++)
-		    fprintf(stderr, "XXH: %s\n", strings[j]);
-    }
-    free(strings);*/
-
     ret = xc_domain_getinfolist(CTX->xch, domid, 1, &info);
     if (ret < 0) {
         LOGE(ERROR, "unable to check for status of guest %"PRId32"", domid);
@@ -1665,6 +1652,22 @@ out:
     libxl__xc_domain_saverestore_async_callback_done(egc, &dss->shs, ok);
 }
 
+static void libxl__domain_resume_wrapper(void *user)
+{
+    int ok = 0, rc;
+    libxl__save_helper_state *shs = user;
+    libxl__egc *egc = shs->egc;
+    libxl__domain_suspend_state *dss = CONTAINER_OF(shs, *dss, shs);
+    fprintf(stderr, "XXH: resume start ctx %p\n", dss);
+    STATE_AO_GC(dss->ao);
+
+    rc = libxl__domain_resume(gc, dss->domid, 1);
+    if (!rc)
+        ok = 1;
+    fprintf(stderr, "XXH: resume end\n");
+    libxl__xc_domain_saverestore_async_callback_done(egc, &dss->shs, ok);
+}
+
 static void libxl__remus_domain_resume_callback(void *data)
 {
     libxl__save_helper_state *shs = data;
@@ -1810,6 +1813,7 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
     const libxl_domain_type type = dss->type;
     const int live = dss->live;
     const int debug = dss->debug;
+    const int ha = dss->ha;
     const libxl_domain_remus_info *const r_info = dss->remus;
     libxl__srm_save_autogen_callbacks *const callbacks =
         &dss->shs.callbacks.save.a;
@@ -1834,6 +1838,7 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
 
     dss->xcflags = (live ? XCFLAGS_LIVE : 0)
           | (debug ? XCFLAGS_DEBUG : 0)
+	  | (ha ? XCFLAGS_HA : 0)
           | (dss->hvm ? XCFLAGS_HVM : 0);
 
     dss->guest_evtchn.port = -1;
@@ -1869,8 +1874,10 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
         callbacks->suspend = libxl__remus_domain_suspend_callback;
         callbacks->postcopy = libxl__remus_domain_resume_callback;
         callbacks->checkpoint = libxl__remus_domain_checkpoint_callback;
-    } else
+    } else {
         callbacks->suspend = libxl__domain_suspend_callback;
+	callbacks->postcopy = libxl__domain_resume_wrapper;
+    }
 
     callbacks->switch_qemu_logdirty = libxl__domain_suspend_common_switch_qemu_logdirty;
     dss->shs.callbacks.save.toolstack_save = libxl__toolstack_save;
