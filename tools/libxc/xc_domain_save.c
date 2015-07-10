@@ -44,7 +44,8 @@
 */
 #define DEF_MAX_ITERS   30   /* limit us to 30 times round loop   */
 #define DEF_MAX_FACTOR   3   /* never send more than 3x p2m_size  */
-#define HA_MAX_COUNTS 3
+#define HA_STATE_ENABLE 1 << 0
+#define HA_STATE_SAVING 1 << 1
 
 struct save_ctx {
     unsigned long hvirt_start; /* virtual starting address of the hypervisor */
@@ -887,11 +888,12 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     int vgt_ha_bitmap_fd = -1;        
     char vgt_ha_bitmap_file[256];  
     unsigned long gm_bitmap[size]; 
-    off_t last_seek_pos;
+    off_t last_seek_pos, first_seek_pos;
+    int ha_stop = 0;
 
 
     DPRINTF("%s: starting save of domid %u", __func__, dom);
-    ERROR("flag %d debug: %d live: %d ha: %d superpages: %d %" PRIu64 "\n", flags, debug, live, ha, superpages, llgettimeofday());
+    ERROR("flag %d debug: %d live: %d ha: %d superpages: %d %lu\n", flags, debug, live, ha, superpages, llgettimeofday());
 
     if ( hvm && !callbacks->switch_qemu_logdirty )
     {
@@ -1001,14 +1003,14 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     else
     {
         /* This is a non-live suspend. Suspend the domain .*/
-        ERROR("XXH: suspend start\n");
+        ERROR("XXH: suspend start %lu\n", llgettimeofday());
         if ( suspend_and_state(callbacks->suspend, callbacks->data, xch,
                                io_fd, dom, &info) )
         {
             ERROR("Domain appears not to have suspended");
             goto out;
         }
-	ERROR("XXH: suspend end! start save vgt info %" PRIu64 "\n", llgettimeofday());
+	ERROR("XXH: suspend end! start save vgt info %lu\n", llgettimeofday());
 	if (is_vgt) {
 		char *vgt_ha_cmd = "save";
 		char buffer[16];
@@ -1029,11 +1031,11 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 			ch++;
 			saving_ret = atoi(buffer);
 			ERROR("XXH: %d read vgt ha file: %d\n", ch, saving_ret);
-			if (saving_ret) {
+			if (saving_ret & HA_STATE_SAVING) {
 				ERROR("XXH: saving! ret=%d returned!\n", saving_ret);
 				sleep(1);
 			} else {
-				ERROR("XXH: save done! ret=0 returned! %" PRIu64 "\n", llgettimeofday());
+				ERROR("XXH: save done! ret=0 returned! %lu\n", llgettimeofday());
 				break;
 			}
 		}
@@ -1165,6 +1167,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 #define wruncached(fd, live, buf, len) write_uncached(xch, last_iter, ob, (fd), (buf), (len))
 #define wrcompressed(fd) write_compressed(xch, compress_ctx, last_iter, ob, (fd))
 
+    fprintf(stderr, "XXH: ha iter %d start %lu\n", ha_iter, llgettimeofday());
     ob = &ob_pagebuf; /* Holds pfn_types, pages/compressed pages */
     /* Now write out each data page, canonicalising page tables as we go... */
     for ( ; ; )
@@ -1619,15 +1622,17 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         if ( live )
         {
-            if ( (iter > max_iters) ||
+	    if (iter > max_iters)
+            /*if ( (iter > max_iters) ||
                  (sent_this_iter+skip_this_iter < 50) ||
-                 (total_sent > dinfo->p2m_size*max_factor) )
+                 (total_sent > dinfo->p2m_size*max_factor) )*/
             {
                 ERROR("Start last iteration\n");
                 last_iter = 1;
 		if (ha)
 			just_set = 1;
 
+                ERROR("XXH: suspend start %lu\n", llgettimeofday());
                 if ( suspend_and_state(callbacks->suspend, callbacks->data,
                                        xch, io_fd, dom, &info) )
                 {
@@ -1635,17 +1640,25 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                     goto out;
                 }
 
-		ERROR("XXH: suspend end! start save vgt info %" PRIu64 "\n", llgettimeofday());
+		ERROR("XXH: suspend end! start save vgt info %lu\n", llgettimeofday());
 		if (is_vgt) {
 			char *vgt_ha_cmd = "save";
+			char *vgt_ha_enable_cmd = "enable";
 			char buffer[16];
-			unsigned int ch = 0, saving_ret;
+			unsigned int ch = 0, state_ret;
 
 			vgt_ha_fd = open(vgt_ha_cp_file, O_RDWR);
 			if (write_exact(vgt_ha_fd, vgt_ha_cmd, sizeof(vgt_ha_cmd))) {
 				ERROR("XXH: write vgt ha file: %s\n", strerror(errno));
 			}
 			close(vgt_ha_fd);
+			if (ha && ha_iter <= 1) {
+				vgt_ha_fd = open(vgt_ha_cp_file, O_RDWR);
+				if (write_exact(vgt_ha_fd, vgt_ha_enable_cmd, sizeof(vgt_ha_cmd))) {
+					ERROR("XXH: write vgt ha file: %s\n", strerror(errno));
+				}
+				close(vgt_ha_fd);
+			}
 			while (ch < 100) {
 				//sleep(1);
 				vgt_ha_state_fd = open(vgt_ha_state_file, O_RDONLY);
@@ -1657,15 +1670,20 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 				}
 				close(vgt_ha_state_fd);
 				ch++;
-				saving_ret = atoi(buffer);
-				ERROR("XXH: %d read vgt ha file: %d\n", ch, saving_ret);
-				if (saving_ret) {
-					ERROR("XXH: saving! ret=%d returned!\n", saving_ret);
+				state_ret = atoi(buffer);
+				ERROR("XXH: %d read vgt ha file: %d\n", ch, state_ret);
+				if (!(state_ret & HA_STATE_ENABLE)) {
+					ha_stop = 1;
+				}
+				//read only once for test
+				break;
+				/*if (state_ret & HA_STATE_SAVING) {
+					ERROR("XXH: saving! ret=%d returned!\n", state_ret);
 					//sleep(1);
 				} else {
-					ERROR("XXH: save done! ret=0 returned! %" PRIu64 "\n", llgettimeofday());
+					ERROR("XXH: save done! ret=0 returned! %lu\n", llgettimeofday());
 					break;
-				}
+				}*/
 			}
 		}
 
@@ -1716,6 +1734,8 @@ clean_shadow:
     /* XXH: flush to file & record pos*/
     outbuf_flush(xch, ob, io_fd);
     last_seek_pos = lseek(io_fd, 0, SEEK_CUR);
+    if (!ha_iter)
+        first_seek_pos = last_seek_pos;
     ERROR("XXH: All memory is saved %llu\n", (unsigned long long)llgettimeofday());
 
     /* After last_iter, buffer the rest of pagebuf & tailbuf data into a
@@ -2204,7 +2224,7 @@ clean_shadow:
     /* Success! */
  success:
     rc = errno = 0;
-    if (ha && ha_iter < HA_MAX_COUNTS) {
+    if (ha && !ha_stop) {
 	    char *vgt_ha_cmd = "ioreq";
 	    fprintf(stderr, "XXH: success! goto outrc! ha iter %d\n", ha_iter);
 	    ha_iter++;
@@ -2219,12 +2239,13 @@ clean_shadow:
 		    fprintf(stderr, "XXH: write vgt ha file: %s\n", strerror(errno));
 	    }
 	    close(vgt_ha_fd);
-	    iter = 1;
+	    iter = 2;
 	    last_iter = 0;
-	    lseek(io_fd, last_seek_pos, SEEK_SET);
-	    fprintf(stderr, "XXH: domain %d resuming data %p\n", dom, callbacks->data);
+	    //lseek(io_fd, last_seek_pos, SEEK_SET);
+	    lseek(io_fd, first_seek_pos, SEEK_SET);
+	    fprintf(stderr, "XXH: domain %d resuming %lu\n", dom, llgettimeofday());
 	    callbacks->postcopy(callbacks->data);
-	    fprintf(stderr, "XXH: domain %d resumed\n", dom);
+	    fprintf(stderr, "XXH: domain %d resumed %lu\n", dom, llgettimeofday());
 	    sleep(2);
 	    goto copypages;
     }
@@ -2298,7 +2319,7 @@ clean_shadow:
             PERROR("Error flushing shadow PT");
         }
 
-        ERROR("XXH: %s %" PRIu64 " goto copypages\n", __func__, llgettimeofday());
+        ERROR("XXH: %s %lu goto copypages\n", __func__, llgettimeofday());
         goto copypages;
     }
 

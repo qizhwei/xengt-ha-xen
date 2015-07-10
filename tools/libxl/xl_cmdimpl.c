@@ -3766,7 +3766,9 @@ static int save_domain(uint32_t domid, const char *filename, int checkpoint,
         }
         if (leavepaused)
             libxl_domain_pause(ctx, domid);
+        fprintf(stderr, "XXH: %s %lu start resume\n", __func__, llgettimeofday());
         libxl_domain_resume(ctx, domid, 1, 0);
+        fprintf(stderr, "XXH: %s %lu end resume\n", __func__, llgettimeofday());
     }
     else
         libxl_domain_destroy(ctx, domid, 0);

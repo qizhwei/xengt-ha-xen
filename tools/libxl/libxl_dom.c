@@ -1240,9 +1240,11 @@ static void domain_suspend_callback_common(libxl__egc *egc,
         xc_hvm_param_get(CTX->xch, domid, HVM_PARAM_ACPI_S_STATE, &hvm_s_state);
     }
 
+    LOG(DEBUG, "pvdrv %ld s_state %ld\n", hvm_pvdrv, hvm_s_state);
     if ((hvm_s_state == 0) && (dss->guest_evtchn.port >= 0)) {
         LOG(DEBUG, "issuing %s suspend request via event channel",
             dss->hvm ? "PVHVM" : "PV");
+	fprintf(stderr, "issuing %s suspend request via event channel\n", dss->hvm ? "PVHVM" : "PV");
         ret = xc_evtchn_notify(CTX->xce, dss->guest_evtchn.port);
         if (ret < 0) {
             LOG(ERROR, "xc_evtchn_notify failed ret=%d", ret);
@@ -1276,6 +1278,7 @@ static void domain_suspend_callback_common(libxl__egc *egc,
 
     LOG(DEBUG, "issuing %s suspend request via XenBus control node",
         dss->hvm ? "PVHVM" : "PV");
+    fprintf(stderr, "issuing %s suspend request via XenBus control node\n", dss->hvm ? "PVHVM" : "PV");
 
     libxl__domain_pvcontrol_write(gc, XBT_NULL, domid, "suspend");
 
@@ -1363,7 +1366,7 @@ static void domain_suspend_common_pvcontrol_suspending(libxl__egc *egc,
     libxl__xs_transaction_abort(gc, &t);
     dss->guest_responded = 1;
     domain_suspend_common_wait_guest(egc,dss);
-    fprintf(stderr, "XXH: %s 7 %llu\n", __func__, (unsigned long long)llgettimeofday());
+    //fprintf(stderr, "XXH: %s 7 %llu\n", __func__, (unsigned long long)llgettimeofday());
     return;
 
  err:
@@ -1398,7 +1401,7 @@ static void domain_suspend_common_wait_guest(libxl__egc *egc,
 static void suspend_common_wait_guest_watch(libxl__egc *egc,
       libxl__ev_xswatch *xsw, const char *watch_path, const char *event_path)
 {
-    fprintf(stderr, "XXH: %s start %llu\n", __func__, (unsigned long long)llgettimeofday());
+    //fprintf(stderr, "XXH: %s start %llu\n", __func__, (unsigned long long)llgettimeofday());
     libxl__domain_suspend_state *dss = CONTAINER_OF(xsw, *dss, guest_watch);
     suspend_common_wait_guest_check(egc, dss);
 }
@@ -1430,7 +1433,7 @@ static void suspend_common_wait_guest_check(libxl__egc *egc,
 
     if (!(info.flags & XEN_DOMINF_shutdown)) {
         /* keep waiting */
-	fprintf(stderr, "XXH: %s keep waiting %llu\n", __func__, (unsigned long long)llgettimeofday());
+	//fprintf(stderr, "XXH: %s keep waiting %llu\n", __func__, (unsigned long long)llgettimeofday());
         return;
     }
 
@@ -1443,8 +1446,8 @@ static void suspend_common_wait_guest_check(libxl__egc *egc,
         goto err;
     }
 
-    LOG(DEBUG, "guest has suspended");
-    fprintf(stderr, "XXH: %s guest has suspended %llu\n", __func__, (unsigned long long)llgettimeofday());
+    //LOG(DEBUG, "guest has suspended");
+    //fprintf(stderr, "XXH: %s guest has suspended %llu\n", __func__, (unsigned long long)llgettimeofday());
     domain_suspend_common_guest_suspended(egc, dss);
     return;
 
@@ -1472,7 +1475,7 @@ static void domain_suspend_common_guest_suspended(libxl__egc *egc,
     libxl__ev_time_deregister(gc, &dss->guest_timeout);
 
     if (dss->hvm) {
-        fprintf(stderr, "XXH: %s %llu\n", __func__, (unsigned long long)llgettimeofday());
+        //fprintf(stderr, "XXH: %s %llu\n", __func__, (unsigned long long)llgettimeofday());
         ret = libxl__domain_suspend_device_model(gc, dss);
         if (ret) {
             LOG(ERROR, "libxl__domain_suspend_device_model failed ret=%d", ret);
@@ -1658,13 +1661,13 @@ static void libxl__domain_resume_wrapper(void *user)
     libxl__save_helper_state *shs = user;
     libxl__egc *egc = shs->egc;
     libxl__domain_suspend_state *dss = CONTAINER_OF(shs, *dss, shs);
-    fprintf(stderr, "XXH: resume start ctx %p\n", dss);
+    //fprintf(stderr, "XXH: resume start ctx %p\n", dss);
     STATE_AO_GC(dss->ao);
 
     rc = libxl__domain_resume(gc, dss->domid, 1);
     if (!rc)
         ok = 1;
-    fprintf(stderr, "XXH: resume end\n");
+    //fprintf(stderr, "XXH: resume end\n");
     libxl__xc_domain_saverestore_async_callback_done(egc, &dss->shs, ok);
 }
 
@@ -1853,6 +1856,7 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
     }
 
     port = xs_suspend_evtchn_port(dss->domid);
+    LOG(DEBUG, "port %d\n", port);
 
     if (port >= 0) {
         rc = libxl__ctx_evtchn_init(gc);
@@ -1876,7 +1880,7 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
         callbacks->checkpoint = libxl__remus_domain_checkpoint_callback;
     } else {
         callbacks->suspend = libxl__domain_suspend_callback;
-	callbacks->postcopy = libxl__domain_resume_wrapper;
+	if (ha) callbacks->postcopy = libxl__domain_resume_wrapper;
     }
 
     callbacks->switch_qemu_logdirty = libxl__domain_suspend_common_switch_qemu_logdirty;
