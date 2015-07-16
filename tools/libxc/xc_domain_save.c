@@ -2241,12 +2241,12 @@ clean_shadow:
 	    close(vgt_ha_fd);
 	    iter = 2;
 	    last_iter = 0;
-	    //lseek(io_fd, last_seek_pos, SEEK_SET);
-	    lseek(io_fd, first_seek_pos, SEEK_SET);
+	    lseek(io_fd, last_seek_pos, SEEK_SET);
+	    //lseek(io_fd, first_seek_pos, SEEK_SET);
 	    fprintf(stderr, "XXH: domain %d resuming %lu\n", dom, llgettimeofday());
 	    callbacks->postcopy(callbacks->data);
 	    fprintf(stderr, "XXH: domain %d resumed %lu\n", dom, llgettimeofday());
-	    sleep(2);
+	    sleep(5);
 	    goto copypages;
     }
     goto out_rc;

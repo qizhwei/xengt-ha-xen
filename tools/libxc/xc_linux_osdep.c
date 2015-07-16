@@ -480,6 +480,7 @@ static int linux_evtchn_notify(xc_evtchn *xce, xc_osdep_handle h, evtchn_port_t 
 
     notify.port = port;
 
+    fprintf(stderr, "XXH %s port %d\n", __func__, port);
     return ioctl(fd, IOCTL_EVTCHN_NOTIFY, &notify);
 }
 

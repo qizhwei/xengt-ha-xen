@@ -1244,7 +1244,7 @@ static void domain_suspend_callback_common(libxl__egc *egc,
     if ((hvm_s_state == 0) && (dss->guest_evtchn.port >= 0)) {
         LOG(DEBUG, "issuing %s suspend request via event channel",
             dss->hvm ? "PVHVM" : "PV");
-	fprintf(stderr, "issuing %s suspend request via event channel\n", dss->hvm ? "PVHVM" : "PV");
+	fprintf(stderr, "issuing %s suspend request via event channel port %d\n", dss->hvm ? "PVHVM" : "PV", dss->guest_evtchn.port);
         ret = xc_evtchn_notify(CTX->xce, dss->guest_evtchn.port);
         if (ret < 0) {
             LOG(ERROR, "xc_evtchn_notify failed ret=%d", ret);
@@ -1865,6 +1865,7 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
         dss->guest_evtchn.port =
             xc_suspend_evtchn_init_exclusive(CTX->xch, CTX->xce,
                                   dss->domid, port, &dss->guest_evtchn_lockfd);
+        LOG(DEBUG, "dss->guest_evtchn.port %d\n", dss->guest_evtchn.port);
 
         if (dss->guest_evtchn.port < 0) {
             LOG(WARN, "Suspend event channel initialization failed");

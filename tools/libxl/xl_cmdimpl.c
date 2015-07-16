@@ -3764,7 +3764,7 @@ static int save_domain(uint32_t domid, const char *filename, int checkpoint,
 	        fprintf(stderr, "XXH: write vgt ha file: %s\n", strerror(errno));
             }
         }
-        if (leavepaused)
+        if (leavepaused || logdirty)
             libxl_domain_pause(ctx, domid);
         fprintf(stderr, "XXH: %s %lu start resume\n", __func__, llgettimeofday());
         libxl_domain_resume(ctx, domid, 1, 0);

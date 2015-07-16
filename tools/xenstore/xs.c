@@ -1104,6 +1104,7 @@ int xs_suspend_evtchn_port(int domid)
     }
 
     port = atoi(portstr);
+    fprintf(stderr, "path %s str %d\n", path, port);
 
 out:
     free(portstr);
