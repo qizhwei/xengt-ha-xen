@@ -1167,7 +1167,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 #define wruncached(fd, live, buf, len) write_uncached(xch, last_iter, ob, (fd), (buf), (len))
 #define wrcompressed(fd) write_compressed(xch, compress_ctx, last_iter, ob, (fd))
 
-    fprintf(stderr, "XXH: ha iter %d start %lu\n", ha_iter, llgettimeofday());
+    fprintf(stderr, "XXH: %d ha iter start %lu\n", ha_iter, llgettimeofday());
     ob = &ob_pagebuf; /* Holds pfn_types, pages/compressed pages */
     /* Now write out each data page, canonicalising page tables as we go... */
     for ( ; ; )
@@ -1714,6 +1714,7 @@ clean_shadow:
             }
 
             sent_last_iter = sent_this_iter;
+            ERROR("XXH: this iter pages saved %u\n", sent_last_iter);
 
 	    // XXH: do saving for every 2 seconds
 	    /*for (j = 0; j < dinfo->p2m_size; j++)
@@ -2241,12 +2242,13 @@ clean_shadow:
 	    close(vgt_ha_fd);
 	    iter = 2;
 	    last_iter = 0;
-	    lseek(io_fd, last_seek_pos, SEEK_SET);
-	    //lseek(io_fd, first_seek_pos, SEEK_SET);
+	    //lseek(io_fd, last_seek_pos, SEEK_SET);
+	    /* XXH: for test */
+	    lseek(io_fd, first_seek_pos, SEEK_SET);
 	    fprintf(stderr, "XXH: domain %d resuming %lu\n", dom, llgettimeofday());
 	    callbacks->postcopy(callbacks->data);
 	    fprintf(stderr, "XXH: domain %d resumed %lu\n", dom, llgettimeofday());
-	    sleep(5);
+	    sleep(2);
 	    goto copypages;
     }
     goto out_rc;
