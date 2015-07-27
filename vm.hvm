@@ -1,0 +1,34 @@
+kernel="hvmloader"
+builder='hvm'
+memory=1024
+name="vgtHVMDomain"
+cpus="3"
+vcpus=1
+vif=[ 'type=ioemu, mac=00:16:3e:09:bb:cc, bridge=xenbr0, model=e1000' ]
+#standard template
+disk=[ 'file:/root/system-10G.img,hda,w', 'file:/root/linux_perf.img,hdb,w' ]
+#for OS installation
+#disk = [ 'file:/root/system-10G.img,hda,w','file:/home/xxh/ubuntu-14.04.1-desktop-amd64.iso,hdc:cdrom,r' ]
+#device_model = 'qemu-dm'
+device_model_version='qemu-xen'
+device_model_override='/usr/lib/xen/bin/qemu-system-i386'
+sdl=1
+opengl=1
+#vnc causes X Windows synchronization flush(fps)?
+vnc=1
+vncpasswd='123456'
+serial='pty'
+tsc_mode=0
+stdvga=0
+usb=1
+usbdevice='tablet'
+keymap='en-us'
+
+# d=cd, c=harddisk
+boot="cd"
+
+#vgt settings
+vgt=1
+vgt_low_gm_sz=64
+vgt_high_gm_sz=448
+vgt_fence_sz=4
