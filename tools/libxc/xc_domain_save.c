@@ -884,6 +884,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     int is_vgt = 0;
     int vgt_ha_state_fd = -1;
     char vgt_ha_state_file[256];
+    int vgt_ha_vgt_state_fd = -1; 
+    char vgt_ha_vgt_state_file[256];
     const int size = 0x100000/8/sizeof(unsigned long);
     int vgt_ha_bitmap_fd = -1;        
     char vgt_ha_bitmap_file[256];  
@@ -963,6 +965,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 	    is_vgt = 1;
 	    sprintf(vgt_ha_bitmap_file, "/sys/kernel/debug/vgt/vm%u/ha_gm_bitmap", dom);
 	    sprintf(vgt_ha_state_file, "/sys/kernel/debug/vgt/vm%u/ha_state", dom);
+	    sprintf(vgt_ha_vgt_state_file, "/sys/kernel/debug/vgt/vm%u/ha_vgt_info", dom);
     }
 
     /* Domain is still running at this point */
@@ -1622,10 +1625,13 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         if ( live )
         {
-	    if (iter > max_iters)
-            /*if ( (iter > max_iters) ||
-                 (sent_this_iter+skip_this_iter < 50) ||
-                 (total_sent > dinfo->p2m_size*max_factor) )*/
+	    if ( (ha && iter > max_iters) ||
+                 (!ha && ((iter > max_iters) ||
+                          (sent_this_iter+skip_this_iter < 50) ||
+                          (total_sent > dinfo->p2m_size*max_factor)
+			 )
+		 )
+	       )
             {
                 ERROR("Start last iteration\n");
                 last_iter = 1;
@@ -1746,6 +1752,31 @@ clean_shadow:
     {
         ob = &ob_tailbuf;
         ob->pos = 0;
+    }
+
+    {
+#define vgt_state_size  11*0x100000
+	    int rcnt;
+	    struct chunk {
+		    int id;
+		    int sz_vgt_state;
+		    char vgt_state_buffer[vgt_state_size];
+	    } chunk = { XC_SAVE_ID_VGT_STATE, vgt_state_size};
+
+	    ERROR("XXH: read vgt state %lu\n", llgettimeofday());
+	    vgt_ha_vgt_state_fd = open(vgt_ha_vgt_state_file, O_RDONLY);
+	    if (vgt_ha_vgt_state_fd == -1) {
+		    fprintf(stderr, "Can't open vgt state file: %s\n", strerror(errno));
+	    }
+	    rcnt = read(vgt_ha_vgt_state_fd, chunk.vgt_state_buffer, vgt_state_size);
+	    close(vgt_ha_vgt_state_fd);
+	    ERROR("XXH: read vgt state done size %x %lu\n", vgt_state_size, llgettimeofday());
+	    if ( wrexact(io_fd, &chunk, sizeof(chunk)) )
+	    {
+		    PERROR("Error when writing to state file");
+		    goto out;
+	    }
+	    ERROR("XXH: write vgt state done %lu\n", llgettimeofday());
     }
 
     {
