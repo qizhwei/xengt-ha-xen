@@ -884,6 +884,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     int is_vgt = 0;
     int vgt_ha_state_fd = -1;
     char vgt_ha_state_file[256];
+    int vgt_ha_vgt_state_fd = -1; 
+    char vgt_ha_vgt_state_file[256];
     const int size = 0x100000/8/sizeof(unsigned long);
     int vgt_ha_bitmap_fd = -1;        
     char vgt_ha_bitmap_file[256];  
@@ -963,6 +965,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 	    is_vgt = 1;
 	    sprintf(vgt_ha_bitmap_file, "/sys/kernel/debug/vgt/vm%u/ha_gm_bitmap", dom);
 	    sprintf(vgt_ha_state_file, "/sys/kernel/debug/vgt/vm%u/ha_state", dom);
+	    sprintf(vgt_ha_vgt_state_file, "/sys/kernel/debug/vgt/vm%u/ha_vgt_info", dom);
     }
 
     /* Domain is still running at this point */
@@ -1031,6 +1034,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 			ch++;
 			saving_ret = atoi(buffer);
 			ERROR("XXH: %d read vgt ha file: %d\n", ch, saving_ret);
+			//read only once for test
+			break;
 			if (saving_ret & HA_STATE_SAVING) {
 				ERROR("XXH: saving! ret=%d returned!\n", saving_ret);
 				sleep(1);
@@ -1167,7 +1172,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 #define wruncached(fd, live, buf, len) write_uncached(xch, last_iter, ob, (fd), (buf), (len))
 #define wrcompressed(fd) write_compressed(xch, compress_ctx, last_iter, ob, (fd))
 
-    fprintf(stderr, "XXH: ha iter %d start %lu\n", ha_iter, llgettimeofday());
+    fprintf(stderr, "XXH: %d ha iter start %lu\n", ha_iter, llgettimeofday());
     ob = &ob_pagebuf; /* Holds pfn_types, pages/compressed pages */
     /* Now write out each data page, canonicalising page tables as we go... */
     for ( ; ; )
@@ -1622,10 +1627,13 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         if ( live )
         {
-	    if (iter > max_iters)
-            /*if ( (iter > max_iters) ||
-                 (sent_this_iter+skip_this_iter < 50) ||
-                 (total_sent > dinfo->p2m_size*max_factor) )*/
+	    if ( (ha && iter > max_iters) ||
+                 (!ha && ((iter > max_iters) ||
+                          (sent_this_iter+skip_this_iter < 50) ||
+                          (total_sent > dinfo->p2m_size*max_factor)
+			 )
+		 )
+	       )
             {
                 ERROR("Start last iteration\n");
                 last_iter = 1;
@@ -1714,6 +1722,7 @@ clean_shadow:
             }
 
             sent_last_iter = sent_this_iter;
+            ERROR("XXH: this iter pages saved %u\n", sent_last_iter);
 
 	    // XXH: do saving for every 2 seconds
 	    /*for (j = 0; j < dinfo->p2m_size; j++)
@@ -1745,6 +1754,41 @@ clean_shadow:
     {
         ob = &ob_tailbuf;
         ob->pos = 0;
+    }
+
+    {
+#define vgt_state_size  11*0x100000
+	    struct chunk {
+		    int id;
+		    int sz_vgt_state;
+	    } chunk = { XC_SAVE_ID_VGT_STATE, vgt_state_size};
+	    char *vgt_state_buffer;
+
+	    ERROR("XXH: read vgt state %lu\n", llgettimeofday());
+	    vgt_ha_vgt_state_fd = open(vgt_ha_vgt_state_file, O_RDONLY);
+	    if (vgt_ha_vgt_state_fd == -1) {
+		    fprintf(stderr, "Can't open vgt state file: %s\n", strerror(errno));
+	    }
+	    vgt_state_buffer = malloc(vgt_state_size);
+	    if (read_exact(vgt_ha_vgt_state_fd, vgt_state_buffer, vgt_state_size)) {
+		    ERROR("XXH: read vgt state error!\n");
+	    }
+	    close(vgt_ha_vgt_state_fd);
+	    ERROR("XXH: read vgt state done size %x %lu\n", vgt_state_size, llgettimeofday());
+	    if (write_exact(io_fd, &chunk, sizeof(chunk)))
+	    {
+		    PERROR("Error when writing to state file cp1");
+		    free(vgt_state_buffer);
+		    goto out;
+	    }
+	    if (write_exact(io_fd, vgt_state_buffer, vgt_state_size))
+	    {
+		    PERROR("Error when writing to state file cp2");
+		    free(vgt_state_buffer);
+		    goto out;
+	    }
+	    free(vgt_state_buffer);
+	    ERROR("XXH: write vgt state done %lu\n", llgettimeofday());
     }
 
     {
@@ -2241,12 +2285,13 @@ clean_shadow:
 	    close(vgt_ha_fd);
 	    iter = 2;
 	    last_iter = 0;
-	    lseek(io_fd, last_seek_pos, SEEK_SET);
-	    //lseek(io_fd, first_seek_pos, SEEK_SET);
+	    //lseek(io_fd, last_seek_pos, SEEK_SET);
+	    /* XXH: for test */
+	    lseek(io_fd, first_seek_pos, SEEK_SET);
 	    fprintf(stderr, "XXH: domain %d resuming %lu\n", dom, llgettimeofday());
 	    callbacks->postcopy(callbacks->data);
 	    fprintf(stderr, "XXH: domain %d resumed %lu\n", dom, llgettimeofday());
-	    sleep(5);
+	    sleep(2);
 	    goto copypages;
     }
     goto out_rc;

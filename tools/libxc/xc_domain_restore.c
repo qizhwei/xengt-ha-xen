@@ -733,6 +733,7 @@ typedef struct {
 
     int new_ctxt_format;
     int max_vcpu_id;
+    int sz_vgt_state;
     uint64_t vcpumap[XC_SR_MAX_VCPUS/64];
     uint64_t identpt;
     uint64_t paging_ring_pfn;
@@ -777,6 +778,9 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
     int count, countpages, oldcount, i;
     void* ptmp;
     unsigned long compbuf_size;
+    int vgt_state_fd = -1;
+    char vgt_state_file[256];
+    char *vgt_state_buffer;
 
     if ( RDEXACT(fd, &count, sizeof(count)) )
     {
@@ -796,6 +800,31 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
         DPRINTF("Entering page verify mode\n");
         buf->verify = 1;
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
+
+    case XC_SAVE_ID_VGT_STATE:
+	PERROR("XXH: XC_SAVE_ID_VGT_STATE start %lu", llgettimeofday());
+        if (RDEXACT(fd, &buf->sz_vgt_state, sizeof(buf->sz_vgt_state))) {
+		PERROR("Error when reading sz_vgt_state\n");
+		return -1;
+	}
+	vgt_state_buffer = malloc(11*0x100000);
+	if (RDEXACT(fd, vgt_state_buffer, buf->sz_vgt_state)) {
+		PERROR("Error when reading vgt_state_buffer\n");
+		free(vgt_state_buffer);
+		return -1;
+	}
+        sprintf(vgt_state_file, "/sys/kernel/debug/vgt/restore_vgt_info");
+        vgt_state_fd = open(vgt_state_file, O_RDWR);
+        if (vgt_state_fd == -1)
+            fprintf(stderr, "Can't open vgt state file: %s\n", strerror(errno));
+	if (write_exact(vgt_state_fd, vgt_state_buffer, buf->sz_vgt_state)) {
+		PERROR("Error when writing vgt state to kernel\n");
+		return -1;
+	}
+	free(vgt_state_buffer);
+	close(vgt_state_fd);
+	PERROR("XXH: XC_SAVE_ID_VGT_STATE size %x %lu", buf->sz_vgt_state, llgettimeofday());
+	return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     case XC_SAVE_ID_VCPU_INFO:
         buf->new_ctxt_format = 1;

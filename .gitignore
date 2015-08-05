@@ -260,6 +260,7 @@ unmodified_drivers/linux-2.6/*.ko
 unmodified_drivers/linux-2.6/*.mod.c
 LibVNCServer*
 
+tools/qemu-xen
 tools/qemu-xen-dir-remote
 tools/qemu-xen-dir
 
