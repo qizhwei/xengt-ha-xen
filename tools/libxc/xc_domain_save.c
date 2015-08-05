@@ -1034,6 +1034,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 			ch++;
 			saving_ret = atoi(buffer);
 			ERROR("XXH: %d read vgt ha file: %d\n", ch, saving_ret);
+			//read only once for test
+			break;
 			if (saving_ret & HA_STATE_SAVING) {
 				ERROR("XXH: saving! ret=%d returned!\n", saving_ret);
 				sleep(1);
@@ -1756,26 +1758,36 @@ clean_shadow:
 
     {
 #define vgt_state_size  11*0x100000
-	    int rcnt;
 	    struct chunk {
 		    int id;
 		    int sz_vgt_state;
-		    char vgt_state_buffer[vgt_state_size];
 	    } chunk = { XC_SAVE_ID_VGT_STATE, vgt_state_size};
+	    char *vgt_state_buffer;
 
 	    ERROR("XXH: read vgt state %lu\n", llgettimeofday());
 	    vgt_ha_vgt_state_fd = open(vgt_ha_vgt_state_file, O_RDONLY);
 	    if (vgt_ha_vgt_state_fd == -1) {
 		    fprintf(stderr, "Can't open vgt state file: %s\n", strerror(errno));
 	    }
-	    rcnt = read(vgt_ha_vgt_state_fd, chunk.vgt_state_buffer, vgt_state_size);
+	    vgt_state_buffer = malloc(vgt_state_size);
+	    if (read_exact(vgt_ha_vgt_state_fd, vgt_state_buffer, vgt_state_size)) {
+		    ERROR("XXH: read vgt state error!\n");
+	    }
 	    close(vgt_ha_vgt_state_fd);
 	    ERROR("XXH: read vgt state done size %x %lu\n", vgt_state_size, llgettimeofday());
-	    if ( wrexact(io_fd, &chunk, sizeof(chunk)) )
+	    if (write_exact(io_fd, &chunk, sizeof(chunk)))
 	    {
-		    PERROR("Error when writing to state file");
+		    PERROR("Error when writing to state file cp1");
+		    free(vgt_state_buffer);
 		    goto out;
 	    }
+	    if (write_exact(io_fd, vgt_state_buffer, vgt_state_size))
+	    {
+		    PERROR("Error when writing to state file cp2");
+		    free(vgt_state_buffer);
+		    goto out;
+	    }
+	    free(vgt_state_buffer);
 	    ERROR("XXH: write vgt state done %lu\n", llgettimeofday());
     }
 
