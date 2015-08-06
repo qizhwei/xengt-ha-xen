@@ -4133,7 +4133,7 @@ static void migrate_receive(int debug, int daemonize, int monitor,
     }
 
     fprintf(stderr, "migration target: Transfer complete,"
-            " requesting permission to start domain.\n");
+            " requesting permission to start domain. %lu\n", llgettimeofday());
 
     rc = libxl_write_exactly(ctx, send_fd,
                              migrate_receiver_ready,
@@ -4146,7 +4146,7 @@ static void migrate_receive(int debug, int daemonize, int monitor,
                                    "GO message", 0);
     if (rc) goto perhaps_destroy_notify_rc;
 
-    fprintf(stderr, "migration target: Got permission, starting domain.\n");
+    fprintf(stderr, "migration target: Got permission, starting domain. %lu\n", llgettimeofday());
 
     if (migration_domname) {
         rc = libxl_domain_rename(ctx, domid, migration_domname, common_domname);
@@ -4156,7 +4156,7 @@ static void migrate_receive(int debug, int daemonize, int monitor,
     rc = libxl_domain_unpause(ctx, domid);
     if (rc) goto perhaps_destroy_notify_rc;
 
-    fprintf(stderr, "migration target: Domain started successsfully.\n");
+    fprintf(stderr, "migration target: Domain started successsfully. %lu\n", llgettimeofday());
     rc = 0;
 
  perhaps_destroy_notify_rc:
