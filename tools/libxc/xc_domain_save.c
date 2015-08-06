@@ -1180,6 +1180,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 	int pos = 0, cnt = 0, rct;
         unsigned int N, batch, run;
         char reportbuf[80];
+	bool gm_bitmap_got = false;
 	//unsigned long to_send_cnt = 0;
 
         snprintf(reportbuf, sizeof(reportbuf),
@@ -1194,12 +1195,13 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         N = 0;
 
         ERROR("XXH: iter %u start %lu\n", iter, llgettimeofday());
-	if (is_vgt && last_iter) {
+	if ((ha && is_vgt && last_iter) || (!ha && is_vgt && live)) {
 		vgt_ha_bitmap_fd = open(vgt_ha_bitmap_file, O_RDONLY);
 		if (vgt_ha_bitmap_fd == -1) {
 			fprintf(stderr, "Can't open vgt ha bitmap file: %s\n", strerror(errno));
 		}
-		rct = read(vgt_ha_bitmap_fd, &gm_bitmap, size*sizeof(unsigned long));
+		rct = read_exact(vgt_ha_bitmap_fd, &gm_bitmap, size*sizeof(unsigned long));
+		gm_bitmap_got = true;
 		for (pos = 0; pos < 0x100000; pos++)
 			if (test_bit(pos, gm_bitmap))
 				cnt ++;
@@ -1284,7 +1286,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                     if ( !((test_bit(n, to_send) && !test_bit(n, to_skip)) ||
                            (test_bit(n, to_send) && dont_skip) ||
                            (test_bit(n, to_fix)  && last_iter) ||
-			   (last_iter && test_bit(n, gm_bitmap)) ||
+			   (gm_bitmap_got && test_bit(n, gm_bitmap)) ||
 			   (last_iter && is_vgt && n >= 0xfeff0 && n <= 0xfeff1)
 			  ) )
                         continue;
@@ -1629,7 +1631,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         {
 	    if ( (ha && iter > max_iters) ||
                  (!ha && ((iter > max_iters) ||
-                          (sent_this_iter+skip_this_iter < 50) ||
+                          (sent_this_iter+skip_this_iter < 100) ||
                           (total_sent > dinfo->p2m_size*max_factor)
 			 )
 		 )
