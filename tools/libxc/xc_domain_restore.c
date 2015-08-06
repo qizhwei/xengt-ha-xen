@@ -802,7 +802,7 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     case XC_SAVE_ID_VGT_STATE:
-	PERROR("XXH: XC_SAVE_ID_VGT_STATE start %lu", llgettimeofday());
+	PERROR("XXH: XC_SAVE_ID_VGT_STATE start receiving %lu\n", llgettimeofday());
         if (RDEXACT(fd, &buf->sz_vgt_state, sizeof(buf->sz_vgt_state))) {
 		PERROR("Error when reading sz_vgt_state\n");
 		return -1;
@@ -813,6 +813,7 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
 		free(vgt_state_buffer);
 		return -1;
 	}
+	PERROR("XXH: XC_SAVE_ID_VGT_STATE received %lu\n", llgettimeofday());
         sprintf(vgt_state_file, "/sys/kernel/debug/vgt/restore_vgt_info");
         vgt_state_fd = open(vgt_state_file, O_RDWR);
         if (vgt_state_fd == -1)
@@ -823,7 +824,7 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
 	}
 	free(vgt_state_buffer);
 	close(vgt_state_fd);
-	PERROR("XXH: XC_SAVE_ID_VGT_STATE size %x %lu", buf->sz_vgt_state, llgettimeofday());
+	PERROR("XXH: XC_SAVE_ID_VGT_STATE writed to kernel size %x %lu\n", buf->sz_vgt_state, llgettimeofday());
 	return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     case XC_SAVE_ID_VCPU_INFO:

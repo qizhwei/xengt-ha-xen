@@ -1758,6 +1758,7 @@ clean_shadow:
         ob->pos = 0;
     }
 
+    if (is_vgt)
     {
 #define vgt_state_size  11*0x100000
 	    struct chunk {
@@ -1779,13 +1780,13 @@ clean_shadow:
 	    ERROR("XXH: read vgt state done size %x %lu\n", vgt_state_size, llgettimeofday());
 	    if (write_exact(io_fd, &chunk, sizeof(chunk)))
 	    {
-		    PERROR("Error when writing to state file cp1");
+		    PERROR("Error when writing to state file cp1\n");
 		    free(vgt_state_buffer);
 		    goto out;
 	    }
 	    if (write_exact(io_fd, vgt_state_buffer, vgt_state_size))
 	    {
-		    PERROR("Error when writing to state file cp2");
+		    PERROR("Error when writing to state file cp2\n");
 		    free(vgt_state_buffer);
 		    goto out;
 	    }
