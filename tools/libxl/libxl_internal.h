@@ -2795,6 +2795,8 @@ struct libxl__domain_suspend_state {
 
     uint32_t domid;
     int ha;
+    int log_dirty;
+    int tv;
     int fd;
     libxl_domain_type type;
     int live;

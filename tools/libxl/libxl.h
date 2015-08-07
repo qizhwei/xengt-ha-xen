@@ -947,11 +947,12 @@ int libxl_retrieve_domain_configuration(libxl_ctx *ctx, uint32_t domid,
 
 int libxl_domain_suspend(libxl_ctx *ctx, uint32_t domid, int fd,
                          int flags, /* LIBXL_SUSPEND_* */
-                         const libxl_asyncop_how *ao_how)
+                         const libxl_asyncop_how *ao_how, int tv)
                          LIBXL_EXTERNAL_CALLERS_ONLY;
 #define LIBXL_SUSPEND_DEBUG 1
 #define LIBXL_SUSPEND_LIVE 2
 #define LIBXL_SUSPEND_HA 4
+#define LIBXL_SUSPEND_LOGDIRTY 8
 
 //void libxl__domain_resume_wrapper(int domid, void *user);
 

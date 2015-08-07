@@ -29,6 +29,7 @@
 #define XCFLAGS_STDVGA    (1 << 3)
 #define XCFLAGS_CHECKPOINT_COMPRESS    (1 << 4)
 #define XCFLAGS_HA        (1 << 5)
+#define XCFLAGS_LOGDIRTY        (1 << 6)
 
 #define X86_64_B_SIZE   64 
 #define X86_32_B_SIZE   32
@@ -89,7 +90,7 @@ struct save_callbacks {
  */
 int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iters,
                    uint32_t max_factor, uint32_t flags /* XCFLAGS_xxx */,
-                   struct save_callbacks* callbacks, int hvm);
+                   struct save_callbacks* callbacks, int hvm, int tv);
 
 
 /* callbacks provided by xc_domain_restore */
