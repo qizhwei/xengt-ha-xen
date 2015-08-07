@@ -112,7 +112,7 @@ void libxl__xc_domain_save(libxl__egc *egc, libxl__domain_suspend_state *dss)
     const unsigned long argnums[] = {
         dss->domid, 0, 0, dss->xcflags, dss->hvm,
         toolstack_data_fd, toolstack_data_len,
-        cbflags,
+        cbflags, dss->tv,
     };
 
     dss->shs.ao = ao;

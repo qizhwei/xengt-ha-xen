@@ -3709,7 +3709,7 @@ static void save_domain_core_writeconfig(int fd, const char *source,
 }
 
 static int save_domain(uint32_t domid, const char *filename, int checkpoint,
-                            int leavepaused, int logdirty, const char *override_config_file)
+                            int leavepaused, int logdirty, int ha, int tv, const char *override_config_file)
 {
     int fd;
     uint8_t *config_data;
@@ -3747,8 +3747,10 @@ static int save_domain(uint32_t domid, const char *filename, int checkpoint,
     fprintf(stderr, "XXH: %s %llu libxl_domain_suspend start ctx %p\n", __func__, (unsigned long long)llgettimeofday(), ctx);
     int flag = 0;
     if (logdirty)
+        flag |= LIBXL_SUSPEND_LIVE | LIBXL_SUSPEND_LOGDIRTY;
+    if (ha)
         flag |= LIBXL_SUSPEND_LIVE | LIBXL_SUSPEND_HA;
-    int rc = libxl_domain_suspend(ctx, domid, fd, flag, NULL);
+    int rc = libxl_domain_suspend(ctx, domid, fd, flag, NULL, tv);
     close(fd);
     fprintf(stderr, "XXH: %s %llu libxl_domain_suspend end\n", __func__, (unsigned long long)llgettimeofday());
 
@@ -3756,7 +3758,7 @@ static int save_domain(uint32_t domid, const char *filename, int checkpoint,
         fprintf(stderr, "Failed to save domain, resuming domain\n");
         libxl_domain_resume(ctx, domid, 1, 0);
     }
-    else if (leavepaused || checkpoint || logdirty) {
+    else if (leavepaused || checkpoint || ha) {
         if (is_vgt) {
             char *vgt_ha_cmd = "ioreq";
             fprintf(stderr, "XXH: enable ioreq_server\n");
@@ -3764,7 +3766,7 @@ static int save_domain(uint32_t domid, const char *filename, int checkpoint,
 	        fprintf(stderr, "XXH: write vgt ha file: %s\n", strerror(errno));
             }
         }
-        if (leavepaused || logdirty)
+        if (leavepaused || ha)
             libxl_domain_pause(ctx, domid);
         fprintf(stderr, "XXH: %s %lu start resume\n", __func__, llgettimeofday());
         libxl_domain_resume(ctx, domid, 1, 0);
@@ -3949,7 +3951,8 @@ static void migrate_domain(uint32_t domid, const char *rune, int debug,
 
     if (debug)
         flags |= LIBXL_SUSPEND_DEBUG;
-    rc = libxl_domain_suspend(ctx, domid, send_fd, flags, NULL);
+    // XXH: in migration, ignore tv here
+    rc = libxl_domain_suspend(ctx, domid, send_fd, flags, NULL, 0);
     if (rc) {
         fprintf(stderr, "migration sender: libxl_domain_suspend failed"
                 " (rc=%d)\n", rc);
@@ -4306,9 +4309,11 @@ int main_save(int argc, char **argv)
     int checkpoint = 0;
     int leavepaused = 0;
     int logdirty = 0;
+    int ha = 0;
     int opt;
+    int tv = 0;
 
-    SWITCH_FOREACH_OPT(opt, "cpl", NULL, "save", 2) {
+    SWITCH_FOREACH_OPT(opt, "cpla", NULL, "save", 2) {
     case 'c':
         checkpoint = 1;
         break;
@@ -4317,6 +4322,9 @@ int main_save(int argc, char **argv)
         break;
     case 'l':
         logdirty = 1;
+        break;
+    case 'a':
+        ha = 1;
         break;
     }
 
@@ -4327,10 +4335,20 @@ int main_save(int argc, char **argv)
 
     domid = find_domain(argv[optind]);
     filename = argv[optind + 1];
-    if ( argc - optind >= 3 )
+    if (logdirty || ha) {
+	    if ( argc - optind >= 4 )
+		    config_filename = argv[optind + 3];
+	    if ( argc - optind >= 3 )
+		    tv = atoi(argv[optind + 2]);
+	    else {
+		    fprintf(stderr, "logdirty or ha mode use default time\n");
+		    tv = 2000;
+	    }
+    }
+    else if ( argc - optind >= 3 )
         config_filename = argv[optind + 2];
 
-    save_domain(domid, filename, checkpoint, leavepaused, logdirty, config_filename);
+    save_domain(domid, filename, checkpoint, leavepaused, logdirty, ha, tv, config_filename);
     return 0;
 }
 

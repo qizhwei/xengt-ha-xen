@@ -24,6 +24,7 @@
 #include <time.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <execinfo.h>
 #include <sys/time.h>
 #include <assert.h>
 
@@ -46,6 +47,7 @@
 #define DEF_MAX_FACTOR   3   /* never send more than 3x p2m_size  */
 #define HA_STATE_ENABLE 1 << 0
 #define HA_STATE_SAVING 1 << 1
+#define HA_STATE_LOGDIRTY 1 << 2
 
 struct save_ctx {
     unsigned long hvirt_start; /* virtual starting address of the hypervisor */
@@ -90,6 +92,25 @@ struct outbuf {
 #define SUPERPAGE_NR_PFNS    (1UL << SUPERPAGE_PFN_SHIFT)
 
 #define SUPER_PAGE_START(pfn)    (((pfn) & (SUPERPAGE_NR_PFNS-1)) == 0 )
+
+static void print_trace (void)
+{
+	void *array[10];
+	size_t size;
+	char **strings;
+	size_t i;
+
+	fprintf (stderr, "XXH: print trace\n");
+	size = backtrace (array, 10);
+	strings = backtrace_symbols (array, size);
+
+	fprintf (stderr, "Obtained %zd stack frames.\n", size);
+
+	for (i = 0; i < size; i++)
+		fprintf (stderr, "%s\n", strings[i]);
+
+	free (strings);
+}
 
 static int noncached_write(xc_interface *xch,
                            struct outbuf* ob,
@@ -786,7 +807,7 @@ static int save_tsc_info(xc_interface *xch, uint32_t dom, int io_fd)
 
 int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iters,
                    uint32_t max_factor, uint32_t flags,
-                   struct save_callbacks* callbacks, int hvm)
+                   struct save_callbacks* callbacks, int hvm, int tv)
 {
     xc_dominfo_t info;
     DECLARE_DOMCTL;
@@ -794,6 +815,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     int rc, frc, i, j, last_iter = 0, iter = 0, ha_iter = 0, just_set = 0;
     int live  = (flags & XCFLAGS_LIVE);
     int debug = (flags & XCFLAGS_DEBUG);
+    int logdirty = (flags & XCFLAGS_LOGDIRTY);
     int ha = (flags & XCFLAGS_HA);
     int superpages = !!hvm;
     int race = 0, sent_last_iter, skip_this_iter = 0;
@@ -892,10 +914,14 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     unsigned long gm_bitmap[size]; 
     off_t last_seek_pos, first_seek_pos;
     int ha_stop = 0;
+    //if read all guest gm bitmap in final copy then set to false
+    int read_dirty_gm_bitmap = true;
+    int logdirty_stop = 0;
 
-
+    print_trace();
     DPRINTF("%s: starting save of domid %u", __func__, dom);
-    ERROR("flag %d debug: %d live: %d ha: %d superpages: %d %lu\n", flags, debug, live, ha, superpages, llgettimeofday());
+    ERROR("flag %d debug: %d live: %d ha: %d logdirty: %d tv: %d superpages: %d %lu\n",
+		    flags, debug, live, ha, logdirty, tv, superpages, llgettimeofday());
 
     if ( hvm && !callbacks->switch_qemu_logdirty )
     {
@@ -1033,7 +1059,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 			close(vgt_ha_state_fd);
 			ch++;
 			saving_ret = atoi(buffer);
-			ERROR("XXH: %d read vgt ha file: %d\n", ch, saving_ret);
+			ERROR("XXH: %d read vgt ha file: %x\n", ch, saving_ret);
 			//read only once for test
 			break;
 			if (saving_ret & HA_STATE_SAVING) {
@@ -1195,7 +1221,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         N = 0;
 
         ERROR("XXH: iter %u start %lu\n", iter, llgettimeofday());
-	if ((ha && is_vgt && last_iter) || (!ha && is_vgt && live)) {
+	if ((ha && is_vgt && last_iter) || (!ha && is_vgt && live && (read_dirty_gm_bitmap || last_iter))) {
 		vgt_ha_bitmap_fd = open(vgt_ha_bitmap_file, O_RDONLY);
 		if (vgt_ha_bitmap_fd == -1) {
 			fprintf(stderr, "Can't open vgt ha bitmap file: %s\n", strerror(errno));
@@ -1622,19 +1648,21 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             continue;
         }
 
-        if ( last_iter && ha )
+        if ( (last_iter && ha) || (!logdirty_stop && logdirty) )
 	    goto clean_shadow;
         if ( last_iter )
             break;
 
         if ( live )
         {
+		// TODO XXH: clear the if condition here
 	    if ( (ha && iter > max_iters) ||
-                 (!ha && ((iter > max_iters) ||
+                 (!ha && !logdirty && ((iter > max_iters) ||
                           (sent_this_iter+skip_this_iter < 100) ||
                           (total_sent > dinfo->p2m_size*max_factor)
 			 )
-		 )
+		 ) ||
+		 (logdirty && logdirty_stop)
 	       )
             {
                 ERROR("Start last iteration\n");
@@ -1681,7 +1709,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 				close(vgt_ha_state_fd);
 				ch++;
 				state_ret = atoi(buffer);
-				ERROR("XXH: %d read vgt ha file: %d\n", ch, state_ret);
+				ERROR("XXH: %d read vgt ha file: %x\n", ch, state_ret);
 				if (!(state_ret & HA_STATE_ENABLE)) {
 					ha_stop = 1;
 				}
@@ -1739,6 +1767,25 @@ clean_shadow:
 		    break;
 	    if (last_iter && ha && just_set)
 		    just_set = 0;
+	    if (logdirty) {
+		    unsigned int state_ret;
+		    char buffer[16];
+
+		    vgt_ha_state_fd = open(vgt_ha_state_file, O_RDONLY);
+		    if (vgt_ha_state_fd == -1) {
+			    fprintf(stderr, "Can't open vgt ha state file: %s\n", strerror(errno));
+		    }
+		    if (read_exact(vgt_ha_state_fd, buffer, sizeof(unsigned int))) {
+			    ERROR("XXH: read vgt ha file: %s\n", strerror(errno));
+		    }
+		    close(vgt_ha_state_fd);
+		    state_ret = atoi(buffer);
+		    ERROR("XXH: logdirty read vgt ha file: %x\n", state_ret);
+		    if (state_ret & HA_STATE_LOGDIRTY) {
+			    logdirty_stop = 1;
+		    }
+		    usleep(tv * 1000);
+	    }
         }
     } /* end of infinite for loop */
 
@@ -2294,7 +2341,7 @@ clean_shadow:
 	    fprintf(stderr, "XXH: domain %d resuming %lu\n", dom, llgettimeofday());
 	    callbacks->postcopy(callbacks->data);
 	    fprintf(stderr, "XXH: domain %d resumed %lu\n", dom, llgettimeofday());
-	    sleep(2);
+	    usleep(tv * 1000);
 	    goto copypages;
     }
     goto out_rc;

@@ -13,7 +13,6 @@
  * GNU Lesser General Public License for more details.
  */
 
-#include <execinfo.h>
 #include "libxl_osdeps.h" /* must come before any other headers */
 
 #include <glob.h>
@@ -1817,6 +1816,7 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
     const int live = dss->live;
     const int debug = dss->debug;
     const int ha = dss->ha;
+    const int logdirty = dss->log_dirty;
     const libxl_domain_remus_info *const r_info = dss->remus;
     libxl__srm_save_autogen_callbacks *const callbacks =
         &dss->shs.callbacks.save.a;
@@ -1842,6 +1842,7 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
     dss->xcflags = (live ? XCFLAGS_LIVE : 0)
           | (debug ? XCFLAGS_DEBUG : 0)
 	  | (ha ? XCFLAGS_HA : 0)
+	  | (logdirty ? XCFLAGS_LOGDIRTY : 0)
           | (dss->hvm ? XCFLAGS_HVM : 0);
 
     dss->guest_evtchn.port = -1;

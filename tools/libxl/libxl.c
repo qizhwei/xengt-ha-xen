@@ -945,7 +945,7 @@ static void domain_suspend_cb(libxl__egc *egc,
 }
 
 int libxl_domain_suspend(libxl_ctx *ctx, uint32_t domid, int fd, int flags,
-                         const libxl_asyncop_how *ao_how)
+                         const libxl_asyncop_how *ao_how, int tv)
 {
     AO_CREATE(ctx, domid, ao_how);
     int rc;
@@ -968,6 +968,8 @@ int libxl_domain_suspend(libxl_ctx *ctx, uint32_t domid, int fd, int flags,
     dss->live = flags & LIBXL_SUSPEND_LIVE;
     dss->debug = flags & LIBXL_SUSPEND_DEBUG;
     dss->ha = flags & LIBXL_SUSPEND_HA;
+    dss->log_dirty = flags & LIBXL_SUSPEND_LOGDIRTY;
+    dss->tv = tv;
 
     libxl__domain_suspend(egc, dss);
     return AO_INPROGRESS;

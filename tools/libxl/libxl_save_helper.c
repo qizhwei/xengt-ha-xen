@@ -220,6 +220,7 @@ int main(int argc, char **argv)
         toolstack_save_fd  =       atoi(NEXTARG);
         toolstack_save_len =       strtoul(NEXTARG,0,10);
         unsigned cbflags =         strtoul(NEXTARG,0,10);
+	int tv =                   atoi(NEXTARG);
         assert(!*++argv);
 
         if (toolstack_save_fd >= 0)
@@ -229,7 +230,7 @@ int main(int argc, char **argv)
 
         startup("save");
         r = xc_domain_save(xch, io_fd, dom, max_iters, max_factor, flags,
-                           &helper_save_callbacks, hvm);
+                           &helper_save_callbacks, hvm, tv);
         complete(r);
 
     } else if (!strcmp(mode,"--restore-domain")) {
