@@ -1061,10 +1061,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 			saving_ret = atoi(buffer);
 			ERROR("XXH: %d read vgt ha file: %x\n", ch, saving_ret);
 			//read only once for test
-			break;
+			//break;
 			if (saving_ret & HA_STATE_SAVING) {
 				ERROR("XXH: saving! ret=%d returned!\n", saving_ret);
-				sleep(1);
+				usleep(20000);
 			} else {
 				ERROR("XXH: save done! ret=0 returned! %lu\n", llgettimeofday());
 				break;
@@ -1193,6 +1193,9 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         goto out;
     }
 
+    last_seek_pos = lseek(io_fd, 0, SEEK_CUR);
+    first_seek_pos = last_seek_pos;
+
   copypages:
 #define wrexact(fd, buf, len) write_buffer(xch, last_iter, ob, (fd), (buf), (len))
 #define wruncached(fd, live, buf, len) write_uncached(xch, last_iter, ob, (fd), (buf), (len))
@@ -1203,10 +1206,11 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     /* Now write out each data page, canonicalising page tables as we go... */
     for ( ; ; )
     {
-	int pos = 0, cnt = 0, rct;
         unsigned int N, batch, run;
         char reportbuf[80];
 	bool gm_bitmap_got = false;
+	int rct;
+	//int pos = 0, cnt = 0;
 	//unsigned long to_send_cnt = 0;
 
         snprintf(reportbuf, sizeof(reportbuf),
@@ -1228,10 +1232,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 		}
 		rct = read_exact(vgt_ha_bitmap_fd, &gm_bitmap, size*sizeof(unsigned long));
 		gm_bitmap_got = true;
-		for (pos = 0; pos < 0x100000; pos++)
+		/*for (pos = 0; pos < 0x100000; pos++)
 			if (test_bit(pos, gm_bitmap))
 				cnt ++;
-		ERROR("XXH: gm bitmap set cnt %x\n", cnt);
+		ERROR("XXH: gm bitmap set cnt %x\n", cnt);*/
 		close(vgt_ha_bitmap_fd);
 	}
 
@@ -1714,14 +1718,14 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 					ha_stop = 1;
 				}
 				//read only once for test
-				break;
-				/*if (state_ret & HA_STATE_SAVING) {
+				//break;
+				if (state_ret & HA_STATE_SAVING) {
 					ERROR("XXH: saving! ret=%d returned!\n", state_ret);
-					//sleep(1);
+					usleep(20000);
 				} else {
 					ERROR("XXH: save done! ret=0 returned! %lu\n", llgettimeofday());
 					break;
-				}*/
+				}
 			}
 		}
 
@@ -1784,6 +1788,14 @@ clean_shadow:
 		    if (state_ret & HA_STATE_LOGDIRTY) {
 			    logdirty_stop = 1;
 		    }
+		    /* XXH: for test */
+		    /* XXH: flush to file & record pos*/
+		    outbuf_flush(xch, ob, io_fd);
+		    last_seek_pos = lseek(io_fd, 0, SEEK_CUR);
+		    if (iter <= 2)
+			    first_seek_pos = last_seek_pos;
+		    if (iter > 2)
+			    lseek(io_fd, first_seek_pos, SEEK_SET);
 		    usleep(tv * 1000);
 	    }
         }
@@ -2335,9 +2347,9 @@ clean_shadow:
 	    close(vgt_ha_fd);
 	    iter = 2;
 	    last_iter = 0;
-	    //lseek(io_fd, last_seek_pos, SEEK_SET);
+	    lseek(io_fd, last_seek_pos, SEEK_SET);
 	    /* XXH: for test */
-	    lseek(io_fd, first_seek_pos, SEEK_SET);
+	    //lseek(io_fd, first_seek_pos, SEEK_SET);
 	    fprintf(stderr, "XXH: domain %d resuming %lu\n", dom, llgettimeofday());
 	    callbacks->postcopy(callbacks->data);
 	    fprintf(stderr, "XXH: domain %d resumed %lu\n", dom, llgettimeofday());
