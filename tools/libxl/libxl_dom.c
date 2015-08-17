@@ -1817,6 +1817,7 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
     const int debug = dss->debug;
     const int ha = dss->ha;
     const int logdirty = dss->log_dirty;
+    const int backup = dss->backup;
     const libxl_domain_remus_info *const r_info = dss->remus;
     libxl__srm_save_autogen_callbacks *const callbacks =
         &dss->shs.callbacks.save.a;
@@ -1843,6 +1844,7 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
           | (debug ? XCFLAGS_DEBUG : 0)
 	  | (ha ? XCFLAGS_HA : 0)
 	  | (logdirty ? XCFLAGS_LOGDIRTY : 0)
+	  | (backup ? XCFLAGS_BACKUP : 0)
           | (dss->hvm ? XCFLAGS_HVM : 0);
 
     dss->guest_evtchn.port = -1;
@@ -1882,7 +1884,8 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
         callbacks->checkpoint = libxl__remus_domain_checkpoint_callback;
     } else {
         callbacks->suspend = libxl__domain_suspend_callback;
-	if (ha) callbacks->postcopy = libxl__domain_resume_wrapper;
+	if (ha || backup) callbacks->postcopy = libxl__domain_resume_wrapper;
+        if (backup) callbacks->checkpoint = libxl__remus_domain_checkpoint_callback;
     }
 
     callbacks->switch_qemu_logdirty = libxl__domain_suspend_common_switch_qemu_logdirty;

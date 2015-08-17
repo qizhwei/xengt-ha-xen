@@ -936,7 +936,7 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
 
     case XC_SAVE_ID_LAST_CHECKPOINT:
         ctx->last_checkpoint = 1;
-        // DPRINTF("last checkpoint indication received");
+	PERROR("XXH: last checkpoint indication received%lu", llgettimeofday());
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     case XC_SAVE_ID_HVM_ACPI_IOPORTS_LOCATION:
@@ -1480,7 +1480,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
                       domid_t store_domid, unsigned int console_evtchn,
                       unsigned long *console_mfn, domid_t console_domid,
                       unsigned int hvm, unsigned int pae, int superpages,
-                      int checkpointed_stream,
+                      int checkpointed_stream, int backup,
                       struct restore_callbacks *callbacks)
 {
     DECLARE_DOMCTL;
@@ -1569,7 +1569,10 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     ctx->superpages = superpages;
     ctx->hvm = hvm;
-    ctx->last_checkpoint = !checkpointed_stream;
+    if (checkpointed_stream || backup)
+	    ctx->last_checkpoint = 0;
+    else
+	    ctx->last_checkpoint = 1;
 
     ctxt = xc_hypercall_buffer_alloc(xch, ctxt, sizeof(*ctxt));
 
@@ -1852,11 +1855,11 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     if ( ctx->last_checkpoint )
     {
-        // DPRINTF("Last checkpoint, finishing\n");
+        fprintf(stderr, "XXH: Last checkpoint, finishing %lu\n", llgettimeofday());
         goto finish;
     }
 
-    // DPRINTF("Buffered checkpoint\n");
+    fprintf(stderr, "XXH: Buffered checkpoint %lu\n", llgettimeofday());
 
     if ( pagebuf_get(xch, ctx, &pagebuf, io_fd, dom) ) {
         PERROR("error when buffering batch, finishing");

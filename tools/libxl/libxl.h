@@ -953,6 +953,7 @@ int libxl_domain_suspend(libxl_ctx *ctx, uint32_t domid, int fd,
 #define LIBXL_SUSPEND_LIVE 2
 #define LIBXL_SUSPEND_HA 4
 #define LIBXL_SUSPEND_LOGDIRTY 8
+#define LIBXL_SUSPEND_BACKUP 16
 
 //void libxl__domain_resume_wrapper(int domid, void *user);
 

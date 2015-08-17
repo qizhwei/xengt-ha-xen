@@ -30,6 +30,7 @@
 #define XCFLAGS_CHECKPOINT_COMPRESS    (1 << 4)
 #define XCFLAGS_HA        (1 << 5)
 #define XCFLAGS_LOGDIRTY        (1 << 6)
+#define XCFLAGS_BACKUP        (1 << 7)
 
 #define X86_64_B_SIZE   64 
 #define X86_32_B_SIZE   32
@@ -126,7 +127,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
                       domid_t store_domid, unsigned int console_evtchn,
                       unsigned long *console_mfn, domid_t console_domid,
                       unsigned int hvm, unsigned int pae, int superpages,
-                      int checkpointed_stream,
+                      int checkpointed_stream, int backup,
                       struct restore_callbacks *callbacks);
 /**
  * xc_domain_restore writes a file to disk that contains the device

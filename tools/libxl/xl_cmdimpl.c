@@ -151,6 +151,7 @@ struct domain_create {
     int vncautopass;
     int console_autoconnect;
     int checkpointed_stream;
+    int backup;
     const char *config_file;
     const char *extra_config; /* extra config string */
     const char *restore_file;
@@ -2522,6 +2523,7 @@ start:
         libxl_domain_restore_params_init(&params);
 
         params.checkpointed_stream = dom_info->checkpointed_stream;
+        params.backup = dom_info->backup;
         ret = libxl_domain_create_restore(ctx, &d_config,
                                           &domid, restore_fd,
                                           &params,
@@ -3923,7 +3925,7 @@ static void migrate_do_preamble(int send_fd, int recv_fd, pid_t child,
 }
 
 static void migrate_domain(uint32_t domid, const char *rune, int debug,
-                           const char *override_config_file)
+                           const char *override_config_file, int backup, int tv)
 {
     pid_t child = -1;
     int rc;
@@ -3952,7 +3954,9 @@ static void migrate_domain(uint32_t domid, const char *rune, int debug,
     if (debug)
         flags |= LIBXL_SUSPEND_DEBUG;
     // XXH: in migration, ignore tv here
-    rc = libxl_domain_suspend(ctx, domid, send_fd, flags, NULL, 0);
+    if (backup)
+	flags |= LIBXL_SUSPEND_BACKUP;
+    rc = libxl_domain_suspend(ctx, domid, send_fd, flags, NULL, tv);
     if (rc) {
         fprintf(stderr, "migration sender: libxl_domain_suspend failed"
                 " (rc=%d)\n", rc);
@@ -4064,7 +4068,7 @@ static void migrate_domain(uint32_t domid, const char *rune, int debug,
 }
 
 static void migrate_receive(int debug, int daemonize, int monitor,
-                            int send_fd, int recv_fd, int remus)
+                            int send_fd, int recv_fd, int remus, int backup, int tv)
 {
     uint32_t domid;
     int rc, rc2;
@@ -4090,6 +4094,7 @@ static void migrate_receive(int debug, int daemonize, int monitor,
     dom_info.migrate_fd = recv_fd;
     dom_info.migration_domname_r = &migration_domname;
     dom_info.checkpointed_stream = remus;
+    dom_info.backup = backup;
 
     rc = create_domain(&dom_info);
     if (rc < 0) {
@@ -4100,7 +4105,7 @@ static void migrate_receive(int debug, int daemonize, int monitor,
 
     domid = rc;
 
-    if (remus) {
+    if (remus || backup) {
         /* If we are here, it means that the sender (primary) has crashed.
          * TODO: Split-Brain Check.
          */
@@ -4271,10 +4276,10 @@ int main_restore(int argc, char **argv)
 
 int main_migrate_receive(int argc, char **argv)
 {
-    int debug = 0, daemonize = 1, monitor = 1, remus = 0;
+    int debug = 0, daemonize = 1, monitor = 1, remus = 0, backup = 0, tv = 5000;
     int opt;
 
-    SWITCH_FOREACH_OPT(opt, "Fedr", NULL, "migrate-receive", 0) {
+    SWITCH_FOREACH_OPT(opt, "Fedrb:", NULL, "migrate-receive", 0) {
     case 'F':
         daemonize = 0;
         break;
@@ -4288,6 +4293,9 @@ int main_migrate_receive(int argc, char **argv)
     case 'r':
         remus = 1;
         break;
+    case 'b':
+	backup = 1;
+	tv = atoi(optarg);
     }
 
     if (argc-optind != 0) {
@@ -4296,7 +4304,7 @@ int main_migrate_receive(int argc, char **argv)
     }
     migrate_receive(debug, daemonize, monitor,
                     STDOUT_FILENO, STDIN_FILENO,
-                    remus);
+                    remus, backup, tv);
 
     return 0;
 }
@@ -4359,14 +4367,14 @@ int main_migrate(int argc, char **argv)
     const char *ssh_command = "ssh";
     char *rune = NULL;
     char *host;
-    int opt, daemonize = 1, monitor = 1, debug = 0;
+    int opt, daemonize = 1, monitor = 1, debug = 0, backup = 0, tv = 5000;
     static struct option opts[] = {
         {"debug", 0, 0, 0x100},
         COMMON_LONG_OPTS,
         {0, 0, 0, 0}
     };
 
-    SWITCH_FOREACH_OPT(opt, "FC:s:e", opts, "migrate", 2) {
+    SWITCH_FOREACH_OPT(opt, "FC:s:eb:", opts, "migrate", 2) {
     case 'C':
         config_filename = optarg;
         break;
@@ -4380,6 +4388,10 @@ int main_migrate(int argc, char **argv)
         daemonize = 0;
         monitor = 0;
         break;
+    case 'b':
+	backup = 1;
+	tv = atoi(optarg);
+	break;
     case 0x100:
         debug = 1;
         break;
@@ -4393,6 +4405,7 @@ int main_migrate(int argc, char **argv)
     if (!ssh_command[0]) {
         rune= host;
     } else {
+	char bakstr[20];
         char verbose_buf[minmsglevel_default+3];
         int verbose_len;
         verbose_buf[0] = ' ';
@@ -4404,16 +4417,19 @@ int main_migrate(int argc, char **argv)
         } else {
             verbose_len = (minmsglevel_default - minmsglevel) + 2;
         }
-        if (asprintf(&rune, "exec %s %s xl%s%.*s migrate-receive%s%s",
+	if (backup)
+		sprintf(bakstr, " -b %d", tv);
+        if (asprintf(&rune, "exec %s %s xl%s%.*s migrate-receive%s%s%s",
                      ssh_command, host,
                      pass_tty_arg ? " -t" : "",
                      verbose_len, verbose_buf,
                      daemonize ? "" : " -e",
-                     debug ? " -d" : "") < 0)
+                     debug ? " -d" : "",
+		     backup ? bakstr : "") < 0)
             return 1;
     }
 
-    migrate_domain(domid, rune, debug, config_filename);
+    migrate_domain(domid, rune, debug, config_filename, backup, tv);
     return 0;
 }
 #endif

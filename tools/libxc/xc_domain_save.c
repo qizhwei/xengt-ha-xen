@@ -817,6 +817,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     int debug = (flags & XCFLAGS_DEBUG);
     int logdirty = (flags & XCFLAGS_LOGDIRTY);
     int ha = (flags & XCFLAGS_HA);
+    int backup = (flags & XCFLAGS_BACKUP);
     int superpages = !!hvm;
     int race = 0, sent_last_iter, skip_this_iter = 0;
     unsigned int sent_this_iter = 0;
@@ -917,6 +918,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     //if read all guest gm bitmap in final copy then set to false
     int read_dirty_gm_bitmap = true;
     int logdirty_stop = 0;
+    int backup_stop = 0;
 
     print_trace();
     DPRINTF("%s: starting save of domid %u", __func__, dom);
@@ -1225,7 +1227,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         N = 0;
 
         ERROR("XXH: iter %u start %lu\n", iter, llgettimeofday());
-	if ((ha && is_vgt && last_iter) || (!ha && is_vgt && live && (read_dirty_gm_bitmap || last_iter))) {
+	if (((backup || ha) && is_vgt && last_iter) || (!ha && is_vgt && live && (read_dirty_gm_bitmap || last_iter))) {
 		vgt_ha_bitmap_fd = open(vgt_ha_bitmap_file, O_RDONLY);
 		if (vgt_ha_bitmap_fd == -1) {
 			fprintf(stderr, "Can't open vgt ha bitmap file: %s\n", strerror(errno));
@@ -1659,10 +1661,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         if ( live )
         {
-		// TODO XXH: clear the if condition here
+	    // TODO XXH: clear the if condition here
 	    if ( (ha && iter > max_iters) ||
                  (!ha && !logdirty && ((iter > max_iters) ||
-                          (sent_this_iter+skip_this_iter < 100) ||
+                          (sent_this_iter+skip_this_iter < 50) ||
                           (total_sent > dinfo->p2m_size*max_factor)
 			 )
 		 ) ||
@@ -1694,7 +1696,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 				ERROR("XXH: write vgt ha file: %s\n", strerror(errno));
 			}
 			close(vgt_ha_fd);
-			if (ha && ha_iter <= 1) {
+			if ((ha && ha_iter <= 1) || backup) {
 				vgt_ha_fd = open(vgt_ha_cp_file, O_RDWR);
 				if (write_exact(vgt_ha_fd, vgt_ha_enable_cmd, sizeof(vgt_ha_cmd))) {
 					ERROR("XXH: write vgt ha file: %s\n", strerror(errno));
@@ -1767,6 +1769,8 @@ clean_shadow:
 
             print_stats(xch, dom, sent_this_iter, &time_stats, &shadow_stats, 0);
 
+	    if (last_iter && backup)
+		    break;
 	    if (last_iter && ha && !just_set)
 		    break;
 	    if (last_iter && ha && just_set)
@@ -1802,10 +1806,12 @@ clean_shadow:
     } /* end of infinite for loop */
 
     /* XXH: flush to file & record pos*/
-    outbuf_flush(xch, ob, io_fd);
-    last_seek_pos = lseek(io_fd, 0, SEEK_CUR);
-    if (!ha_iter)
-        first_seek_pos = last_seek_pos;
+    if (ha) {
+	    outbuf_flush(xch, ob, io_fd);
+	    last_seek_pos = lseek(io_fd, 0, SEEK_CUR);
+	    if (!ha_iter)
+		    first_seek_pos = last_seek_pos;
+    }
     ERROR("XXH: All memory is saved %llu\n", (unsigned long long)llgettimeofday());
 
     /* After last_iter, buffer the rest of pagebuf & tailbuf data into a
@@ -2401,6 +2407,25 @@ clean_shadow:
 
     /* Enable compression now, finally */
     compressing = (flags & XCFLAGS_CHECKPOINT_COMPRESS);
+
+    {
+	    int state_ret;
+	    vgt_ha_state_fd = open(vgt_ha_state_file, O_RDONLY);
+	    if (vgt_ha_state_fd == -1) {
+		    fprintf(stderr, "Can't open vgt ha state file: %s\n", strerror(errno));
+	    }
+	    if (read_exact(vgt_ha_state_fd, buffer, sizeof(unsigned int))) {
+		    ERROR("XXH: read vgt ha file: %s\n", strerror(errno));
+	    }
+	    close(vgt_ha_state_fd);
+	    state_ret = atoi(buffer);
+	    ERROR("XXH: backup read vgt ha file: %x\n", state_ret);
+	    if (!(state_ret & HA_STATE_ENABLE)) {
+		    backup_stop = 1;
+	    }
+	    if (!backup_stop)
+		    usleep(tv * 1000);
+    }
 
     /* checkpoint_cb can spend arbitrarily long in between rounds */
     if (!rc && callbacks->checkpoint &&
