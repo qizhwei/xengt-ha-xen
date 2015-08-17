@@ -85,6 +85,7 @@ static ssize_t rdexact(xc_interface *xch, struct restore_ctx *ctx,
             FD_ZERO(&rfds);
             FD_SET(fd, &rfds);
             len = select(fd + 1, &rfds, NULL, NULL, &tv);
+	    ERROR("complete wait for data %lu", llgettimeofday());
             if ( len == -1 && errno == EINTR )
                 continue;
             if ( !FD_ISSET(fd, &rfds) ) {
@@ -1077,7 +1078,7 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
         return -1;
     }
 
-    ERROR("XXH: receiving pages... count %u %lu", count, llgettimeofday());
+    //ERROR("XXH: receiving pages... count %u %lu", count, llgettimeofday());
     countpages = count;
     for (i = oldcount; i < buf->nr_pages; ++i)
     {
@@ -1882,6 +1883,9 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     }
     tailbuf_free(&tailbuf);
     memcpy(&tailbuf, &tmptail, sizeof(tailbuf));
+
+    if (backup)
+	    ctx->completed = 0;
 
     goto loadpages;
 

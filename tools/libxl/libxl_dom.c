@@ -1799,6 +1799,7 @@ static void remus_next_checkpoint(libxl__egc *egc, libxl__ev_time *ev,
      * (xc_domain_save.c). in order to continue executing the infinite loop
      * (suspend, checkpoint, resume) in xc_domain_save().
      */
+    fprintf(stderr, "XXH: %s\n", __func__);
     libxl__xc_domain_saverestore_async_callback_done(egc, &dss->shs, 1);
 }
 
@@ -1857,6 +1858,8 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
         if (libxl_defbool_val(r_info->compression))
             dss->xcflags |= XCFLAGS_CHECKPOINT_COMPRESS;
     }
+    if (backup)
+	    dss->interval = dss->tv;
 
     port = xs_suspend_evtchn_port(dss->domid);
     LOG(DEBUG, "port %d\n", port);

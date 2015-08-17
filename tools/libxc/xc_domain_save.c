@@ -919,11 +919,13 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     int read_dirty_gm_bitmap = true;
     int logdirty_stop = 0;
     int backup_stop = 0;
+    unsigned int state_ret;
+    char ha_state_buffer[16];
 
     print_trace();
     DPRINTF("%s: starting save of domid %u", __func__, dom);
-    ERROR("flag %d debug: %d live: %d ha: %d logdirty: %d tv: %d superpages: %d %lu\n",
-		    flags, debug, live, ha, logdirty, tv, superpages, llgettimeofday());
+    ERROR("flag %d debug: %d live: %d ha: %d logdirty: %d backup: %d tv: %d superpages: %d %lu\n",
+		    flags, debug, live, ha, logdirty, backup, tv, superpages, llgettimeofday());
 
     if ( hvm && !callbacks->switch_qemu_logdirty )
     {
@@ -1776,18 +1778,15 @@ clean_shadow:
 	    if (last_iter && ha && just_set)
 		    just_set = 0;
 	    if (logdirty) {
-		    unsigned int state_ret;
-		    char buffer[16];
-
 		    vgt_ha_state_fd = open(vgt_ha_state_file, O_RDONLY);
 		    if (vgt_ha_state_fd == -1) {
 			    fprintf(stderr, "Can't open vgt ha state file: %s\n", strerror(errno));
 		    }
-		    if (read_exact(vgt_ha_state_fd, buffer, sizeof(unsigned int))) {
+		    if (read_exact(vgt_ha_state_fd, ha_state_buffer, sizeof(unsigned int))) {
 			    ERROR("XXH: read vgt ha file: %s\n", strerror(errno));
 		    }
 		    close(vgt_ha_state_fd);
-		    state_ret = atoi(buffer);
+		    state_ret = atoi(ha_state_buffer);
 		    ERROR("XXH: logdirty read vgt ha file: %x\n", state_ret);
 		    if (state_ret & HA_STATE_LOGDIRTY) {
 			    logdirty_stop = 1;
@@ -2035,7 +2034,7 @@ clean_shadow:
         free(buf);
     }
 
-    if ( !callbacks->checkpoint )
+    if ( !callbacks->checkpoint || backup_stop)
     {
         /*
          * If this is not a checkpointed save then this must be the first and
@@ -2370,7 +2369,7 @@ clean_shadow:
  out_rc:
     completed = 1;
 
-    if ( !rc && callbacks->postcopy && !ha)
+    if ( !rc && callbacks->postcopy && !ha && backup && !backup_stop)
         callbacks->postcopy(callbacks->data);
 
     /* guest has been resumed. Now we can compress data
@@ -2408,32 +2407,42 @@ clean_shadow:
     /* Enable compression now, finally */
     compressing = (flags & XCFLAGS_CHECKPOINT_COMPRESS);
 
-    {
-	    int state_ret;
-	    vgt_ha_state_fd = open(vgt_ha_state_file, O_RDONLY);
-	    if (vgt_ha_state_fd == -1) {
-		    fprintf(stderr, "Can't open vgt ha state file: %s\n", strerror(errno));
-	    }
-	    if (read_exact(vgt_ha_state_fd, buffer, sizeof(unsigned int))) {
-		    ERROR("XXH: read vgt ha file: %s\n", strerror(errno));
-	    }
-	    close(vgt_ha_state_fd);
-	    state_ret = atoi(buffer);
-	    ERROR("XXH: backup read vgt ha file: %x\n", state_ret);
-	    if (!(state_ret & HA_STATE_ENABLE)) {
-		    backup_stop = 1;
-	    }
-	    if (!backup_stop)
-		    usleep(tv * 1000);
+    if (backup_stop)
+	    goto out_final;
+
+    vgt_ha_state_fd = open(vgt_ha_state_file, O_RDONLY);
+    if (vgt_ha_state_fd == -1) {
+	    fprintf(stderr, "Can't open vgt ha state file: %s\n", strerror(errno));
     }
+    if (read_exact(vgt_ha_state_fd, ha_state_buffer, sizeof(unsigned int))) {
+	    ERROR("XXH: read vgt ha file: %s\n", strerror(errno));
+    }
+    close(vgt_ha_state_fd);
+    state_ret = atoi(ha_state_buffer);
+    ERROR("XXH: backup read vgt ha file: %x %lu\n", state_ret, llgettimeofday());
+    if (!(state_ret & HA_STATE_ENABLE)) {
+	    backup_stop = 1;
+    }
+    if (backup) {
+	    /* Zero terminate */
+	    i = 0;
+	    if ( wrexact(io_fd, &i, sizeof(int)) )
+	    {
+		    PERROR("Error when writing to state file (6')");
+		    goto out;
+	    }
+    }
+    if (!backup_stop)
+	    usleep(tv * 1000);
 
     /* checkpoint_cb can spend arbitrarily long in between rounds */
-    if (!rc && callbacks->checkpoint &&
-        callbacks->checkpoint(callbacks->data) > 0)
+    if ((backup) ||
+        (!rc && callbacks->checkpoint && callbacks->checkpoint(callbacks->data) > 0))
     {
         /* reset stats timer */
         print_stats(xch, dom, 0, &time_stats, &shadow_stats, 0);
 
+	ERROR("XXH: backup suspend start %lu\n", llgettimeofday());
         /* last_iter = 1; */
         if ( suspend_and_state(callbacks->suspend, callbacks->data, xch,
                                io_fd, dom, &info) )
@@ -2455,6 +2464,7 @@ clean_shadow:
         goto copypages;
     }
 
+out_final:
     if ( tmem_saved != 0 && live )
         xc_tmem_save_done(xch, dom);
 
