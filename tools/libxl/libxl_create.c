@@ -1550,11 +1550,12 @@ int libxl_domain_create_new(libxl_ctx *ctx, libxl_domain_config *d_config,
 int libxl_domain_create_restore(libxl_ctx *ctx, libxl_domain_config *d_config,
                                 uint32_t *domid, int restore_fd,
                                 const libxl_domain_restore_params *params,
+				const int backup,
                                 const libxl_asyncop_how *ao_how,
                                 const libxl_asyncprogress_how *aop_console_how)
 {
     return do_domain_create(ctx, d_config, domid, restore_fd,
-                            params->checkpointed_stream, params->backup, ao_how, aop_console_how);
+                            params->checkpointed_stream, backup, ao_how, aop_console_how);
 }
 
 /*

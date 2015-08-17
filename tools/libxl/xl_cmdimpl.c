@@ -2523,10 +2523,9 @@ start:
         libxl_domain_restore_params_init(&params);
 
         params.checkpointed_stream = dom_info->checkpointed_stream;
-        params.backup = dom_info->backup;
         ret = libxl_domain_create_restore(ctx, &d_config,
                                           &domid, restore_fd,
-                                          &params,
+                                          &params, dom_info->backup,
                                           0, autoconnect_console_how);
 
         libxl_domain_restore_params_dispose(&params);
