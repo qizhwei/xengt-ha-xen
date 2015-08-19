@@ -20,6 +20,7 @@
  * Copyright (c) 2003, K A Fraser.
  */
 
+#include <pthread.h>
 #include <inttypes.h>
 #include <time.h>
 #include <stdlib.h>
@@ -805,6 +806,36 @@ static int save_tsc_info(xc_interface *xch, uint32_t dom, int io_fd)
     return 0;
 }
 
+struct async_copy {
+	pthread_mutex_t mu;
+	pthread_cond_t cond;
+	int *last_iter;
+	int interval;
+	int work;
+	int stop;
+};
+
+static void *wait_interval(void *data)
+{
+	struct async_copy *p = data;
+
+	while (true) {
+		if (p->stop) {
+			break;
+		}
+		if (!p->work) {
+			usleep(10000);
+		}
+		else {
+			usleep(p->interval * 1000);
+			*(p->last_iter) = 1;
+			fprintf(stderr, "XXH: backup last iter set to 1 %lu\n", llgettimeofday());
+			p->work = 0;
+		}
+	}
+	pthread_exit(NULL);
+}
+
 int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iters,
                    uint32_t max_factor, uint32_t flags,
                    struct save_callbacks* callbacks, int hvm, int tv)
@@ -817,6 +848,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     int debug = (flags & XCFLAGS_DEBUG);
     int logdirty = (flags & XCFLAGS_LOGDIRTY);
     int ha = (flags & XCFLAGS_HA);
+    int backup = (flags & XCFLAGS_BACKUP);
     int superpages = !!hvm;
     int race = 0, sent_last_iter, skip_this_iter = 0;
     unsigned int sent_this_iter = 0;
@@ -917,11 +949,19 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     //if read all guest gm bitmap in final copy then set to false
     int read_dirty_gm_bitmap = true;
     int logdirty_stop = 0;
+    int backup_stop = 0;
+    unsigned int state_ret;
+    char ha_state_buffer[16];
+    int bkflag;
+    int async_copy_interval = 1000;//-1 to turn off
+    pthread_t async_copy_thread;
+    struct async_copy ac_data;
+    int last_iter_tmp;
 
     print_trace();
     DPRINTF("%s: starting save of domid %u", __func__, dom);
-    ERROR("flag %d debug: %d live: %d ha: %d logdirty: %d tv: %d superpages: %d %lu\n",
-		    flags, debug, live, ha, logdirty, tv, superpages, llgettimeofday());
+    ERROR("flag %d debug: %d live: %d ha: %d logdirty: %d backup: %d tv: %d superpages: %d %lu\n",
+		    flags, debug, live, ha, logdirty, backup, tv, superpages, llgettimeofday());
 
     if ( hvm && !callbacks->switch_qemu_logdirty )
     {
@@ -993,6 +1033,16 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 	    sprintf(vgt_ha_state_file, "/sys/kernel/debug/vgt/vm%u/ha_state", dom);
 	    sprintf(vgt_ha_vgt_state_file, "/sys/kernel/debug/vgt/vm%u/ha_vgt_info", dom);
     }
+    if (backup && async_copy_interval > 0) {
+	    ac_data.last_iter = &last_iter_tmp;
+	    ac_data.interval = tv;
+	    ac_data.work = 0;
+	    ac_data.stop = 0;
+	    pthread_mutex_init(&ac_data.mu, NULL);
+	    pthread_cond_init(&ac_data.cond, NULL);
+	    pthread_create(&async_copy_thread, NULL, wait_interval, (void *)&ac_data);
+	    pthread_detach(async_copy_thread);
+    }
 
     /* Domain is still running at this point */
     if ( live )
@@ -1061,10 +1111,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 			saving_ret = atoi(buffer);
 			ERROR("XXH: %d read vgt ha file: %x\n", ch, saving_ret);
 			//read only once for test
-			break;
+			//break;
 			if (saving_ret & HA_STATE_SAVING) {
 				ERROR("XXH: saving! ret=%d returned!\n", saving_ret);
-				sleep(1);
+				usleep(20000);
 			} else {
 				ERROR("XXH: save done! ret=0 returned! %lu\n", llgettimeofday());
 				break;
@@ -1193,20 +1243,40 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         goto out;
     }
 
+    last_seek_pos = lseek(io_fd, 0, SEEK_CUR);
+    first_seek_pos = last_seek_pos;
+
   copypages:
 #define wrexact(fd, buf, len) write_buffer(xch, last_iter, ob, (fd), (buf), (len))
 #define wruncached(fd, live, buf, len) write_uncached(xch, last_iter, ob, (fd), (buf), (len))
 #define wrcompressed(fd) write_compressed(xch, compress_ctx, last_iter, ob, (fd))
 
     fprintf(stderr, "XXH: %d ha iter start %lu\n", ha_iter, llgettimeofday());
+    if (backup && last_iter) {
+	    vgt_ha_state_fd = open(vgt_ha_state_file, O_RDONLY);
+	    if (vgt_ha_state_fd == -1) {
+		    fprintf(stderr, "Can't open vgt ha state file: %s\n", strerror(errno));
+	    }
+	    if (read_exact(vgt_ha_state_fd, ha_state_buffer, sizeof(unsigned int))) {
+		    ERROR("XXH: read vgt ha file: %s\n", strerror(errno));
+	    }
+	    close(vgt_ha_state_fd);
+	    state_ret = atoi(ha_state_buffer);
+	    if (!(state_ret & HA_STATE_ENABLE)) {
+		    backup_stop = 1;
+		    ERROR("XXH: backup about to stop %x %lu\n", state_ret, llgettimeofday());
+	    }
+    }
     ob = &ob_pagebuf; /* Holds pfn_types, pages/compressed pages */
     /* Now write out each data page, canonicalising page tables as we go... */
     for ( ; ; )
     {
-	int pos = 0, cnt = 0, rct;
-        unsigned int N, batch, run;
+        unsigned int N, batch, run, broken;
         char reportbuf[80];
 	bool gm_bitmap_got = false;
+	int rct;
+	unsigned long time_stamp;
+	//int pos = 0, cnt = 0;
 	//unsigned long to_send_cnt = 0;
 
         snprintf(reportbuf, sizeof(reportbuf),
@@ -1215,23 +1285,24 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         xc_report_progress_start(xch, reportbuf, dinfo->p2m_size);
 
+	time_stamp = llgettimeofday();
         iter++;
         sent_this_iter = 0;
         skip_this_iter = 0;
         N = 0;
 
         ERROR("XXH: iter %u start %lu\n", iter, llgettimeofday());
-	if ((ha && is_vgt && last_iter) || (!ha && is_vgt && live && (read_dirty_gm_bitmap || last_iter))) {
+	if (((backup || ha) && is_vgt && last_iter) || (!ha && is_vgt && live && (read_dirty_gm_bitmap || last_iter))) {
 		vgt_ha_bitmap_fd = open(vgt_ha_bitmap_file, O_RDONLY);
 		if (vgt_ha_bitmap_fd == -1) {
 			fprintf(stderr, "Can't open vgt ha bitmap file: %s\n", strerror(errno));
 		}
 		rct = read_exact(vgt_ha_bitmap_fd, &gm_bitmap, size*sizeof(unsigned long));
 		gm_bitmap_got = true;
-		for (pos = 0; pos < 0x100000; pos++)
+		/*for (pos = 0; pos < 0x100000; pos++)
 			if (test_bit(pos, gm_bitmap))
 				cnt ++;
-		ERROR("XXH: gm bitmap set cnt %x\n", cnt);
+		ERROR("XXH: gm bitmap set cnt %x\n", cnt);*/
 		close(vgt_ha_bitmap_fd);
 	}
 
@@ -1282,7 +1353,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
                 if ( completed )
                 {
-		    ERROR("XXH: in complete!\n");
                     /* for sparse bitmaps, word-by-word may save time */
                     if ( !to_send[N >> ORDER_LONG] )
                     {
@@ -1333,8 +1403,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                     */
 
                     pfn_batch[batch] = n;
-		    if (n >= 0xffef0 && n <= 0xffef1)
-		        ERROR("XXH: gfn %x in!\n", n);
+		    /*if (n >= 0xffef0 && n <= 0xffef1)
+		        ERROR("XXH: gfn %x in!\n", n);*/
 
                     /* Hypercall interfaces operate in PFNs for HVM guests
                      * and MFNs for PV guests */
@@ -1371,8 +1441,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                 batch++;
             }
 
-            if ( batch == 0 )
-                goto skip; /* vanishingly unlikely... */
+            if ( batch == 0 ) {
+		    ERROR("XXH: batch = 0? %lu\n", llgettimeofday());
+		    goto skip; /* vanishingly unlikely... */
+	    }
 
             region_base = xc_map_foreign_bulk(
                 xch, dom, PROT_READ, pfn_type, pfn_err, batch);
@@ -1471,6 +1543,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
             /* entering this loop, pfn_type is now in pfns (Not mfns) */
             run = 0;
+	    broken = 0;
             for ( j = 0; j < batch; j++ )
             {
                 unsigned long pfn, pagetype;
@@ -1503,8 +1576,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                  */
                 if ( pagetype == XEN_DOMCTL_PFINFO_XTAB
                     || pagetype == XEN_DOMCTL_PFINFO_BROKEN
-                    || pagetype == XEN_DOMCTL_PFINFO_XALLOC )
+                    || pagetype == XEN_DOMCTL_PFINFO_XALLOC ) {
+		    broken++;
                     continue;
+		}
 
                 pagetype &= XEN_DOMCTL_PFINFO_LTABTYPE_MASK;
 
@@ -1611,6 +1686,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             }
 
             sent_this_iter += batch;
+	    /*if (last_iter) {
+		ERROR("XXH: sending batch count %d pfn_type[0] %lx first int %x trans %d %lu\n",
+				batch, pfn_type[0], *(int *)region_base, batch-broken, llgettimeofday());
+	    }*/
 
             munmap(region_base, batch*PAGE_SIZE);
 
@@ -1626,6 +1705,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         {
             print_stats( xch, dom, sent_this_iter, &time_stats, &shadow_stats, 1);
 
+	    ERROR("XXH: lastiter sent pages cnt: %u %lu\n", sent_this_iter, llgettimeofday());
             ERROR("Total pages sent= %ld (%.2fx)\n",
                     total_sent, ((float)total_sent)/dinfo->p2m_size );
             ERROR("(of which %ld were fixups)\n", needed_to_fix  );
@@ -1655,10 +1735,12 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         if ( live )
         {
-		// TODO XXH: clear the if condition here
+	    if (backup && async_copy_interval > 0 && ac_data.work)
+		    goto clean_shadow;
+	    // TODO XXH: clear the if condition here
 	    if ( (ha && iter > max_iters) ||
                  (!ha && !logdirty && ((iter > max_iters) ||
-                          (sent_this_iter+skip_this_iter < 100) ||
+                          (sent_this_iter+skip_this_iter < 50) ||
                           (total_sent > dinfo->p2m_size*max_factor)
 			 )
 		 ) ||
@@ -1670,7 +1752,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 		if (ha)
 			just_set = 1;
 
-                ERROR("XXH: suspend start %lu\n", llgettimeofday());
+                ERROR("XXH: suspend start %p %lu\n", callbacks->data, llgettimeofday());
                 if ( suspend_and_state(callbacks->suspend, callbacks->data,
                                        xch, io_fd, dom, &info) )
                 {
@@ -1690,7 +1772,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 				ERROR("XXH: write vgt ha file: %s\n", strerror(errno));
 			}
 			close(vgt_ha_fd);
-			if (ha && ha_iter <= 1) {
+			if ((ha && ha_iter <= 1) || backup) {
 				vgt_ha_fd = open(vgt_ha_cp_file, O_RDWR);
 				if (write_exact(vgt_ha_fd, vgt_ha_enable_cmd, sizeof(vgt_ha_cmd))) {
 					ERROR("XXH: write vgt ha file: %s\n", strerror(errno));
@@ -1714,14 +1796,14 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 					ha_stop = 1;
 				}
 				//read only once for test
-				break;
-				/*if (state_ret & HA_STATE_SAVING) {
+				//break;
+				if (state_ret & HA_STATE_SAVING) {
 					ERROR("XXH: saving! ret=%d returned!\n", state_ret);
-					//sleep(1);
+					usleep(20000);
 				} else {
 					ERROR("XXH: save done! ret=0 returned! %lu\n", llgettimeofday());
 					break;
-				}*/
+				}
 			}
 		}
 
@@ -1738,8 +1820,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                     PERROR("Error when writing to state file (tsc)");
                     goto out;
                 }
-
-
             }
 
 clean_shadow:
@@ -1752,7 +1832,7 @@ clean_shadow:
             }
 
             sent_last_iter = sent_this_iter;
-            ERROR("XXH: this iter pages saved %u\n", sent_last_iter);
+            //ERROR("XXH: this iter pages saved %u\n", sent_last_iter);
 
 	    // XXH: do saving for every 2 seconds
 	    /*for (j = 0; j < dinfo->p2m_size; j++)
@@ -1763,37 +1843,62 @@ clean_shadow:
 
             print_stats(xch, dom, sent_this_iter, &time_stats, &shadow_stats, 0);
 
+	    if (backup && async_copy_interval > 0 && ac_data.work) {
+		    if (last_iter_tmp) {
+			    ERROR("XXH: backup goto last iter %lu\n", llgettimeofday());
+			    rc = 0;
+			    goto backup_last_iter;
+		    } else {
+			    unsigned long time_used = llgettimeofday() - time_stamp;
+			    long time_sleep = async_copy_interval * 1000 - time_used;
+			    if (time_sleep > 0) {
+				    usleep(time_sleep);
+			    } else {
+				    ERROR("XXH: backup save takes too long! %ld %lu\n", time_sleep, llgettimeofday());
+			    }
+			    continue;
+		    }
+	    }
 	    if (last_iter && ha && !just_set)
 		    break;
 	    if (last_iter && ha && just_set)
 		    just_set = 0;
 	    if (logdirty) {
-		    unsigned int state_ret;
-		    char buffer[16];
-
 		    vgt_ha_state_fd = open(vgt_ha_state_file, O_RDONLY);
 		    if (vgt_ha_state_fd == -1) {
 			    fprintf(stderr, "Can't open vgt ha state file: %s\n", strerror(errno));
 		    }
-		    if (read_exact(vgt_ha_state_fd, buffer, sizeof(unsigned int))) {
+		    if (read_exact(vgt_ha_state_fd, ha_state_buffer, sizeof(unsigned int))) {
 			    ERROR("XXH: read vgt ha file: %s\n", strerror(errno));
 		    }
 		    close(vgt_ha_state_fd);
-		    state_ret = atoi(buffer);
+		    state_ret = atoi(ha_state_buffer);
 		    ERROR("XXH: logdirty read vgt ha file: %x\n", state_ret);
 		    if (state_ret & HA_STATE_LOGDIRTY) {
 			    logdirty_stop = 1;
 		    }
+		    /* XXH: for test */
+		    /* XXH: flush to file & record pos*/
+		    outbuf_flush(xch, ob, io_fd);
+		    last_seek_pos = lseek(io_fd, 0, SEEK_CUR);
+		    if (iter <= 2)
+			    first_seek_pos = last_seek_pos;
+		    if (iter > 2)
+			    lseek(io_fd, first_seek_pos, SEEK_SET);
 		    usleep(tv * 1000);
 	    }
         }
     } /* end of infinite for loop */
 
     /* XXH: flush to file & record pos*/
-    outbuf_flush(xch, ob, io_fd);
-    last_seek_pos = lseek(io_fd, 0, SEEK_CUR);
-    if (!ha_iter)
-        first_seek_pos = last_seek_pos;
+    if (ha) {
+	    outbuf_flush(xch, ob, io_fd);
+	    last_seek_pos = lseek(io_fd, 0, SEEK_CUR);
+	    if (!ha_iter)
+		    first_seek_pos = last_seek_pos;
+    }
+    if (backup)
+	    outbuf_flush(xch, ob, io_fd);
     ERROR("XXH: All memory is saved %llu\n", (unsigned long long)llgettimeofday());
 
     /* After last_iter, buffer the rest of pagebuf & tailbuf data into a
@@ -2017,7 +2122,7 @@ clean_shadow:
         free(buf);
     }
 
-    if ( !callbacks->checkpoint )
+    if ( !callbacks->checkpoint || backup_stop)
     {
         /*
          * If this is not a checkpointed save then this must be the first and
@@ -2051,6 +2156,7 @@ clean_shadow:
     }
 
     /* Zero terminate */
+    ERROR("XXH: sending 0 to end body %lu\n", llgettimeofday());
     i = 0;
     if ( wrexact(io_fd, &i, sizeof(int)) )
     {
@@ -2062,6 +2168,7 @@ clean_shadow:
     {
         uint32_t rec_size;
 
+	ERROR("XXH: sending tail %lu\n", llgettimeofday());
         /* Save magic-page locations. */
         memset(magic_pfns, 0, sizeof(magic_pfns));
         xc_hvm_param_get(xch, dom, HVM_PARAM_IOREQ_PFN, &magic_pfns[0]);
@@ -2335,9 +2442,9 @@ clean_shadow:
 	    close(vgt_ha_fd);
 	    iter = 2;
 	    last_iter = 0;
-	    //lseek(io_fd, last_seek_pos, SEEK_SET);
+	    lseek(io_fd, last_seek_pos, SEEK_SET);
 	    /* XXH: for test */
-	    lseek(io_fd, first_seek_pos, SEEK_SET);
+	    //lseek(io_fd, first_seek_pos, SEEK_SET);
 	    fprintf(stderr, "XXH: domain %d resuming %lu\n", dom, llgettimeofday());
 	    callbacks->postcopy(callbacks->data);
 	    fprintf(stderr, "XXH: domain %d resumed %lu\n", dom, llgettimeofday());
@@ -2350,10 +2457,26 @@ clean_shadow:
     rc = errno;
     assert(rc);
  out_rc:
-    completed = 1;
+    if (!backup)
+	    completed = 1;
 
-    if ( !rc && callbacks->postcopy && !ha)
+    if (backup && is_vgt) {
+	    char *vgt_ha_cmd = "ioreq";
+	    if ( ob && outbuf_flush(xch, ob, io_fd) < 0 ) {
+		    PERROR("Error when flushing output buffer");
+		    if (!rc)
+			    rc = errno;
+	    }
+	    /*XXH: resume domu & goto copypages*/
+	    vgt_ha_fd = open(vgt_ha_cp_file, O_RDWR);
+	    if (write_exact(vgt_ha_fd, vgt_ha_cmd, sizeof(vgt_ha_cmd))) {
+		    fprintf(stderr, "XXH: write vgt ha file: %s\n", strerror(errno));
+	    }
+	    close(vgt_ha_fd);
+    }
+    if ( !rc && callbacks->postcopy && !ha && backup && !backup_stop)
         callbacks->postcopy(callbacks->data);
+    fprintf(stderr, "XXH: domain %d resumed %lu\n", dom, llgettimeofday());
 
     /* guest has been resumed. Now we can compress data
      * at our own pace.
@@ -2376,7 +2499,7 @@ clean_shadow:
     }
 
     if (ob) {
-        PERROR("XXH: outrc cp 2\n");
+        PERROR("XXH: outrc cp 2");
     }
     /* Flush last write and discard cache for file. */
     if ( ob && outbuf_flush(xch, ob, io_fd) < 0 ) {
@@ -2390,20 +2513,83 @@ clean_shadow:
     /* Enable compression now, finally */
     compressing = (flags & XCFLAGS_CHECKPOINT_COMPRESS);
 
+    if (backup_stop)
+	    goto out_final;
+
+    /* XXH: Here,we wait the interval time while the dom is running
+     * this may cause huge amount of dirty pages trans after suspend
+     * TODO a better trade-off is to jump to copypages routine and
+     * copy pages at another pace, so we can reduce last-copy time.
+     */
+    bkflag = 0;
+    if (backup) {
+	    int cp_ret;
+	    /* XXH: now last part dm state will be sent */
+	    ERROR("XXH: backup callback->checkpoint start %lu\n", llgettimeofday());
+	    if (async_copy_interval > 0) {
+		    cp_ret = callbacks->checkpoint(callbacks->data);
+		    outbuf_flush(xch, ob, io_fd);
+		    ERROR("XXH: backup callback->checkpoint async end %d %lu\n", cp_ret, llgettimeofday());
+		    /* XXH: start timer & go to copypage */
+		    last_iter = last_iter_tmp = 0;
+		    ac_data.work = 1;
+		    goto copypages;
+	    }
+	    cp_ret = callbacks->checkpoint(callbacks->data);
+	    outbuf_flush(xch, ob, io_fd);
+	    ERROR("XXH: backup callback->checkpoint sync end %d %lu\n", cp_ret, llgettimeofday());
+	    /* XXH: A checkpoint is sent now */
+    }
+backup_last_iter:
+    bkflag = 1;
     /* checkpoint_cb can spend arbitrarily long in between rounds */
-    if (!rc && callbacks->checkpoint &&
-        callbacks->checkpoint(callbacks->data) > 0)
+    if ((backup && bkflag) ||
+        (!backup && !rc && callbacks->checkpoint && callbacks->checkpoint(callbacks->data) > 0))
     {
         /* reset stats timer */
         print_stats(xch, dom, 0, &time_stats, &shadow_stats, 0);
 
-        /* last_iter = 1; */
+	ERROR("XXH: backup suspend start %lu\n", llgettimeofday());
+        last_iter = 1;
+	ha_iter++;
         if ( suspend_and_state(callbacks->suspend, callbacks->data, xch,
                                io_fd, dom, &info) )
         {
             ERROR("Domain appears not to have suspended");
             goto out;
         }
+	ERROR("XXH: backup suspend end! start save vgt info %lu\n", llgettimeofday());
+	if (is_vgt) {
+		char *vgt_ha_cmd = "save";
+		char buffer[16];
+		unsigned int ch = 0, state_ret;
+
+		vgt_ha_fd = open(vgt_ha_cp_file, O_RDWR);
+		if (write_exact(vgt_ha_fd, vgt_ha_cmd, sizeof(vgt_ha_cmd))) {
+			ERROR("XXH: write vgt ha file: %s\n", strerror(errno));
+		}
+		close(vgt_ha_fd);
+		while (ch < 100) {
+			vgt_ha_state_fd = open(vgt_ha_state_file, O_RDONLY);
+			if (vgt_ha_state_fd == -1) {
+				fprintf(stderr, "Can't open vgt ha state file: %s\n", strerror(errno));
+			}
+			if (read_exact(vgt_ha_state_fd, buffer, sizeof(unsigned int))) {
+				ERROR("XXH: read vgt ha file: %s\n", strerror(errno));
+			}
+			close(vgt_ha_state_fd);
+			ch++;
+			state_ret = atoi(buffer);
+			ERROR("XXH: %d read vgt ha file: %x\n", ch, state_ret);
+			if (state_ret & HA_STATE_SAVING) {
+				ERROR("XXH: saving! ret=%d returned!\n", state_ret);
+				usleep(20000);
+			} else {
+				ERROR("XXH: save done! ret=0 returned! %lu\n", llgettimeofday());
+				break;
+			}
+		}
+	}
         ERROR("SUSPEND shinfo %08lx\n", info.shared_info_frame);
         print_stats(xch, dom, 0, &time_stats, &shadow_stats, 1);
 
@@ -2414,10 +2600,11 @@ clean_shadow:
             PERROR("Error flushing shadow PT");
         }
 
-        ERROR("XXH: %s %lu goto copypages\n", __func__, llgettimeofday());
+        ERROR("XXH: %s goto copypages %lu\n", __func__, llgettimeofday());
         goto copypages;
     }
 
+out_final:
     if ( tmem_saved != 0 && live )
         xc_tmem_save_done(xch, dom);
 
@@ -2454,6 +2641,12 @@ clean_shadow:
     outbuf_free(&ob_pagebuf);
 
     errno = rc;
+    if (backup && async_copy_interval > 0) {
+	    ac_data.stop = 1;
+	    pthread_mutex_destroy(&ac_data.mu);
+	    pthread_cond_destroy(&ac_data.cond);
+	    pthread_exit(NULL);
+    }
 exit:
     ERROR("Save exit of domid %u with errno=%d\n", dom, errno);
 

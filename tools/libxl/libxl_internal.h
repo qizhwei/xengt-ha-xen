@@ -2796,6 +2796,7 @@ struct libxl__domain_suspend_state {
     uint32_t domid;
     int ha;
     int log_dirty;
+    int backup;
     int tv;
     int fd;
     libxl_domain_type type;
@@ -3078,6 +3079,7 @@ struct libxl__domain_create_state {
     /* private to domain_create */
     int guest_domid;
     int checkpointed_stream;
+    int backup;
     libxl__domain_build_state build_state;
     libxl__bootloader_state bl;
     libxl__stub_dm_spawn_state dmss;

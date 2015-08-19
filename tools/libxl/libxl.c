@@ -969,6 +969,7 @@ int libxl_domain_suspend(libxl_ctx *ctx, uint32_t domid, int fd, int flags,
     dss->debug = flags & LIBXL_SUSPEND_DEBUG;
     dss->ha = flags & LIBXL_SUSPEND_HA;
     dss->log_dirty = flags & LIBXL_SUSPEND_LOGDIRTY;
+    dss->backup = flags & LIBXL_SUSPEND_BACKUP;
     dss->tv = tv;
 
     libxl__domain_suspend(egc, dss);

@@ -64,7 +64,7 @@ struct restore_ctx {
     struct domain_info_context dinfo;
 };
 
-#define HEARTBEAT_MS 1000
+#define HEARTBEAT_MS 10000
 
 #ifndef __MINIOS__
 static ssize_t rdexact(xc_interface *xch, struct restore_ctx *ctx,
@@ -78,13 +78,13 @@ static ssize_t rdexact(xc_interface *xch, struct restore_ctx *ctx,
     while ( offset < size )
     {
         if ( ctx->completed ) {
-            /* expect a heartbeat every HEARBEAT_MS ms maximum */
             tv.tv_sec = HEARTBEAT_MS / 1000;
             tv.tv_usec = (HEARTBEAT_MS % 1000) * 1000;
 
             FD_ZERO(&rfds);
             FD_SET(fd, &rfds);
             len = select(fd + 1, &rfds, NULL, NULL, &tv);
+	    //ERROR("complete wait for data len %ld errno %d %lu", len, errno, llgettimeofday());
             if ( len == -1 && errno == EINTR )
                 continue;
             if ( !FD_ISSET(fd, &rfds) ) {
@@ -561,11 +561,13 @@ static int buffer_tail_hvm(xc_interface *xch, struct restore_ctx *ctx,
         PERROR("Error reading HVM params");
         return -1;
     }
+    PERROR("XXH: hvmbuf received %lu", llgettimeofday());
 
     if ( RDEXACT(fd, qemusig, sizeof(qemusig)) ) {
         PERROR("Error reading QEMU signature");
         return -1;
     }
+    PERROR("XXH: qemusig received %lu", llgettimeofday());
 
     /* The legacy live-migration QEMU record has no length information.
      * Short of reimplementing the QEMU parser, we're forced to just read
@@ -775,7 +777,7 @@ static void pagebuf_free(pagebuf_t* buf)
 static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
                            pagebuf_t* buf, int fd, uint32_t dom)
 {
-    int count, countpages, oldcount, i;
+    int count, countpages, oldcount, oldcount2, i;
     void* ptmp;
     unsigned long compbuf_size;
     int vgt_state_fd = -1;
@@ -788,12 +790,12 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
         return -1;
     }
 
-    // DPRINTF("reading batch of %d pages\n", count);
+    //PERROR("receiving batch of %d pages", count);
 
     switch ( count )
     {
     case 0:
-        // DPRINTF("Last batch read\n");
+	PERROR("XXH: receive 0 to end %lu", llgettimeofday());
         return 0;
 
     case XC_SAVE_ID_ENABLE_VERIFY_MODE:
@@ -802,30 +804,35 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     case XC_SAVE_ID_VGT_STATE:
-	PERROR("XXH: XC_SAVE_ID_VGT_STATE start receiving %lu\n", llgettimeofday());
+	PERROR("XXH: XC_SAVE_ID_VGT_STATE start receiving %lu", llgettimeofday());
         if (RDEXACT(fd, &buf->sz_vgt_state, sizeof(buf->sz_vgt_state))) {
-		PERROR("Error when reading sz_vgt_state\n");
+		PERROR("Error when reading sz_vgt_state");
 		return -1;
 	}
 	vgt_state_buffer = malloc(11*0x100000);
 	if (RDEXACT(fd, vgt_state_buffer, buf->sz_vgt_state)) {
-		PERROR("Error when reading vgt_state_buffer\n");
+		PERROR("Error when reading vgt_state_buffer");
 		free(vgt_state_buffer);
 		return -1;
 	}
-	PERROR("XXH: XC_SAVE_ID_VGT_STATE received %lu\n", llgettimeofday());
+	PERROR("XXH: XC_SAVE_ID_VGT_STATE received %lu", llgettimeofday());
+	/* TODO check kernel code after write to kernel 1st time */
         sprintf(vgt_state_file, "/sys/kernel/debug/vgt/restore_vgt_info");
         vgt_state_fd = open(vgt_state_file, O_RDWR);
         if (vgt_state_fd == -1)
             fprintf(stderr, "Can't open vgt state file: %s\n", strerror(errno));
 	if (write_exact(vgt_state_fd, vgt_state_buffer, buf->sz_vgt_state)) {
-		PERROR("Error when writing vgt state to kernel\n");
+		PERROR("Error when writing vgt state to kernel");
 		return -1;
 	}
 	free(vgt_state_buffer);
 	close(vgt_state_fd);
-	PERROR("XXH: XC_SAVE_ID_VGT_STATE writed to kernel size %x %lu\n", buf->sz_vgt_state, llgettimeofday());
+	PERROR("XXH: XC_SAVE_ID_VGT_STATE writed to kernel size %x %lu", buf->sz_vgt_state, llgettimeofday());
 	return pagebuf_get_one(xch, ctx, buf, fd, dom);
+
+    case XC_SAVE_ID_BACKUP_HEARTBEAT:
+	PERROR("XXH: XC_SAVE_ID_BACKUP_HEARTBEAT %lu", llgettimeofday());
+	return XC_SAVE_ID_BACKUP_HEARTBEAT;
 
     case XC_SAVE_ID_VCPU_INFO:
         buf->new_ctxt_format = 1;
@@ -936,7 +943,7 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
 
     case XC_SAVE_ID_LAST_CHECKPOINT:
         ctx->last_checkpoint = 1;
-        // DPRINTF("last checkpoint indication received");
+	PERROR("XXH: last checkpoint indication received%lu", llgettimeofday());
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     case XC_SAVE_ID_HVM_ACPI_IOPORTS_LOCATION:
@@ -1033,8 +1040,8 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
             PERROR("error read the ioreq server gmfn base");
             return -1;
         }
-        fprintf(stderr, "XXH: %s(): reading XC_SAVE_ID_HVM_IOREQ_SERVER_PFN base:0x%llx\n",
-                __func__, (unsigned long long)buf->ioreq_server_pfn);
+        /*fprintf(stderr, "XXH: %s(): reading XC_SAVE_ID_HVM_IOREQ_SERVER_PFN base:0x%llx\n",
+                __func__, (unsigned long long)buf->ioreq_server_pfn);*/
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     case XC_SAVE_ID_HVM_NR_IOREQ_SERVER_PAGES:
@@ -1045,8 +1052,8 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
             PERROR("error read the ioreq server gmfn count");
             return -1;
         }
-        fprintf(stderr, "XXH: %s(): reading XC_SAVE_ID_HVM_NR_IOREQ_SERVER_PAGES pages:%llu \n",
-                __func__, (unsigned long long)buf->nr_ioreq_server_pages);
+        /*fprintf(stderr, "XXH: %s(): reading XC_SAVE_ID_HVM_NR_IOREQ_SERVER_PAGES pages:%llu \n",
+                __func__, (unsigned long long)buf->nr_ioreq_server_pages);*/
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     default:
@@ -1099,7 +1106,7 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
     if (buf->compressing)
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
-    oldcount = buf->nr_physpages;
+    oldcount2 = buf->nr_physpages;
     buf->nr_physpages += countpages;
     if (!buf->pages) {
         if (!(buf->pages = malloc(buf->nr_physpages * PAGE_SIZE))) {
@@ -1113,10 +1120,13 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
         }
         buf->pages = ptmp;
     }
-    if ( RDEXACT(fd, buf->pages + oldcount * PAGE_SIZE, countpages * PAGE_SIZE) ) {
+    if ( RDEXACT(fd, (char *)(buf->pages) + oldcount2 * PAGE_SIZE, countpages * PAGE_SIZE) ) {
         PERROR("Error when reading pages");
         return -1;
     }
+    /*ERROR("XXH: receiving pages... pfn[oldcount] %lx pagestrans %u first int %x %lu",
+		    buf->pfn_types[oldcount], countpages, 
+		    *(int *)((char *)(buf->pages) + oldcount * PAGE_SIZE), llgettimeofday());*/
 
     return count;
 }
@@ -1125,13 +1135,17 @@ static int pagebuf_get(xc_interface *xch, struct restore_ctx *ctx,
                        pagebuf_t* buf, int fd, uint32_t dom)
 {
     int rc;
+    int i = 0;
 
     buf->nr_physpages = buf->nr_pages = 0;
     buf->compbuf_pos = buf->compbuf_size = 0;
 
     do {
         rc = pagebuf_get_one(xch, ctx, buf, fd, dom);
-    } while (rc > 0);
+	i++;
+	/*if (ctx->completed)
+            PERROR("XXH: %s i=%d rc=%d %lu", __func__, i, rc, llgettimeofday());*/
+    } while (rc > 0 || rc == XC_SAVE_ID_BACKUP_HEARTBEAT);
 
     if (rc < 0)
         pagebuf_free(buf);
@@ -1479,7 +1493,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
                       domid_t store_domid, unsigned int console_evtchn,
                       unsigned long *console_mfn, domid_t console_domid,
                       unsigned int hvm, unsigned int pae, int superpages,
-                      int checkpointed_stream,
+                      int checkpointed_stream, int backup,
                       struct restore_callbacks *callbacks)
 {
     DECLARE_DOMCTL;
@@ -1568,7 +1582,10 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     ctx->superpages = superpages;
     ctx->hvm = hvm;
-    ctx->last_checkpoint = !checkpointed_stream;
+    if (checkpointed_stream || backup)
+	    ctx->last_checkpoint = 0;
+    else
+	    ctx->last_checkpoint = 1;
 
     ctxt = xc_hypercall_buffer_alloc(xch, ctxt, sizeof(*ctxt));
 
@@ -1759,6 +1776,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         m += j;
         if ( m > MAX_PAGECACHE_USAGE )
         {
+	    //PERROR("XXH: >MAX_PAGECACHE_USAGE discard_file_cache!!!!!!!");
             discard_file_cache(xch, io_fd, 0 /* no flush */);
             m = 0;
         }
@@ -1851,12 +1869,14 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     if ( ctx->last_checkpoint )
     {
-        // DPRINTF("Last checkpoint, finishing\n");
+        fprintf(stderr, "XXH: Last checkpoint, finishing %lu\n", llgettimeofday());
         goto finish;
     }
 
-    // DPRINTF("Buffered checkpoint\n");
+    /* XXH: the buffered checkpoint is made */
+    fprintf(stderr, "XXH: Buffered checkpoint %lu\n", llgettimeofday());
 
+    /* XXH: start to buffer a new checkpoint */
     if ( pagebuf_get(xch, ctx, &pagebuf, io_fd, dom) ) {
         PERROR("error when buffering batch, finishing");
         /*

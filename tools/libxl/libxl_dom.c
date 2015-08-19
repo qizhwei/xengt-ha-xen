@@ -1729,6 +1729,86 @@ static void libxl__remus_domain_checkpoint_callback(void *data)
     }
 }
 
+static void backup_next_checkpoint(libxl__egc *egc, libxl__ev_time *ev,
+                                  const struct timeval *requested_abs)
+{
+    libxl__domain_suspend_state *dss =
+                            CONTAINER_OF(ev, *dss, checkpoint_timeout);
+
+    STATE_AO_GC(dss->ao);
+
+    fprintf(stderr, "XXH: backup %s %lu\n", __func__, llgettimeofday());
+    libxl__xc_domain_saverestore_async_callback_done(egc, &dss->shs, 1);
+}
+
+/*static void backup_checkpoint_dm_saved(libxl__egc *egc,
+                                      libxl__domain_suspend_state *dss, int rc)
+{
+    STATE_AO_GC(dss->ao);
+
+    if (rc) {
+        LOG(ERROR, "Failed to save device model. Terminating backup..");
+        return;
+    }
+
+    rc = libxl__ev_time_register_rel(gc, &dss->checkpoint_timeout,
+                                     backup_next_checkpoint,
+                                     dss->interval);
+
+    if (rc)
+        goto out;
+
+    fprintf(stderr, "XXH: backup %s %lu\n", __func__, llgettimeofday());
+    return;
+
+out:
+    libxl__xc_domain_saverestore_async_callback_done(egc, &dss->shs, 0);
+
+    return;
+}*/
+
+static void backup_checkpoint_dm_saved_fast_return(libxl__egc *egc,
+                                      libxl__domain_suspend_state *dss, int rc)
+{
+    STATE_AO_GC(dss->ao);
+
+    if (rc) {
+        LOG(ERROR, "Failed to save device model. Terminating backup..");
+        return;
+    }
+
+    rc = libxl__ev_time_register_rel(gc, &dss->checkpoint_timeout,
+                                     backup_next_checkpoint,
+                                     0);
+
+    if (rc)
+        goto out;
+
+    fprintf(stderr, "XXH: backup %s %lu\n", __func__, llgettimeofday());
+    return;
+
+out:
+    libxl__xc_domain_saverestore_async_callback_done(egc, &dss->shs, 0);
+
+    return;
+}
+
+static void libxl__domain_checkpoint_wrapper(void *data)
+{
+    libxl__save_helper_state *shs = data;
+    libxl__domain_suspend_state *dss = CONTAINER_OF(shs, *dss, shs);
+    libxl__egc *egc = dss->shs.egc;
+    STATE_AO_GC(dss->ao);
+
+    /* This would go into tailbuf. */
+    if (dss->hvm) {
+	    //libxl__domain_save_device_model(egc, dss, backup_checkpoint_dm_saved);
+	    libxl__domain_save_device_model(egc, dss, backup_checkpoint_dm_saved_fast_return);
+    } else {
+	    LOG(ERROR, "Not support pv");
+    }
+}
+
 static void remus_checkpoint_dm_saved(libxl__egc *egc,
                                       libxl__domain_suspend_state *dss, int rc)
 {
@@ -1799,6 +1879,7 @@ static void remus_next_checkpoint(libxl__egc *egc, libxl__ev_time *ev,
      * (xc_domain_save.c). in order to continue executing the infinite loop
      * (suspend, checkpoint, resume) in xc_domain_save().
      */
+    fprintf(stderr, "XXH: %s\n", __func__);
     libxl__xc_domain_saverestore_async_callback_done(egc, &dss->shs, 1);
 }
 
@@ -1817,6 +1898,7 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
     const int debug = dss->debug;
     const int ha = dss->ha;
     const int logdirty = dss->log_dirty;
+    const int backup = dss->backup;
     const libxl_domain_remus_info *const r_info = dss->remus;
     libxl__srm_save_autogen_callbacks *const callbacks =
         &dss->shs.callbacks.save.a;
@@ -1843,6 +1925,7 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
           | (debug ? XCFLAGS_DEBUG : 0)
 	  | (ha ? XCFLAGS_HA : 0)
 	  | (logdirty ? XCFLAGS_LOGDIRTY : 0)
+	  | (backup ? XCFLAGS_BACKUP : 0)
           | (dss->hvm ? XCFLAGS_HVM : 0);
 
     dss->guest_evtchn.port = -1;
@@ -1855,6 +1938,8 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
         if (libxl_defbool_val(r_info->compression))
             dss->xcflags |= XCFLAGS_CHECKPOINT_COMPRESS;
     }
+    if (backup)
+	    dss->interval = dss->tv;
 
     port = xs_suspend_evtchn_port(dss->domid);
     LOG(DEBUG, "port %d\n", port);
@@ -1882,7 +1967,8 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
         callbacks->checkpoint = libxl__remus_domain_checkpoint_callback;
     } else {
         callbacks->suspend = libxl__domain_suspend_callback;
-	if (ha) callbacks->postcopy = libxl__domain_resume_wrapper;
+	if (ha || backup) callbacks->postcopy = libxl__domain_resume_wrapper;
+        if (backup) callbacks->checkpoint = libxl__domain_checkpoint_wrapper;
     }
 
     callbacks->switch_qemu_logdirty = libxl__domain_suspend_common_switch_qemu_logdirty;
