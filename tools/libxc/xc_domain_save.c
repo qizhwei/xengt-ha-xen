@@ -2453,6 +2453,11 @@ clean_shadow:
     if (backup_stop)
 	    goto out_final;
 
+    /* XXH: Here,we wait the interval time while the dom is running
+     * this may cause huge amount of dirty pages trans after suspend
+     * TODO a better trade-off is to jump to copypages routine and
+     * copy pages at another pace, so we can reduce last-copy time.
+     */
     bkflag = 0;
     if (backup) {
 	    int cp_ret;
@@ -2461,7 +2466,7 @@ clean_shadow:
 	    cp_ret = callbacks->checkpoint(callbacks->data);
 	    outbuf_flush(xch, ob, io_fd);
 	    ERROR("XXH: backup callback->checkpoint end %d %lu\n", cp_ret, llgettimeofday());
-	    /* XXH: A checkpoint is made */
+	    /* XXH: A checkpoint is sent now */
 	    bkflag = 1;
     }
     /* checkpoint_cb can spend arbitrarily long in between rounds */
@@ -2479,7 +2484,38 @@ clean_shadow:
             ERROR("Domain appears not to have suspended");
             goto out;
         }
-	ERROR("XXH: backup suspend end %lu\n", llgettimeofday());
+	ERROR("XXH: backup suspend end! start save vgt info %lu\n", llgettimeofday());
+	if (is_vgt) {
+		char *vgt_ha_cmd = "save";
+		char buffer[16];
+		unsigned int ch = 0, state_ret;
+
+		vgt_ha_fd = open(vgt_ha_cp_file, O_RDWR);
+		if (write_exact(vgt_ha_fd, vgt_ha_cmd, sizeof(vgt_ha_cmd))) {
+			ERROR("XXH: write vgt ha file: %s\n", strerror(errno));
+		}
+		close(vgt_ha_fd);
+		while (ch < 100) {
+			vgt_ha_state_fd = open(vgt_ha_state_file, O_RDONLY);
+			if (vgt_ha_state_fd == -1) {
+				fprintf(stderr, "Can't open vgt ha state file: %s\n", strerror(errno));
+			}
+			if (read_exact(vgt_ha_state_fd, buffer, sizeof(unsigned int))) {
+				ERROR("XXH: read vgt ha file: %s\n", strerror(errno));
+			}
+			close(vgt_ha_state_fd);
+			ch++;
+			state_ret = atoi(buffer);
+			ERROR("XXH: %d read vgt ha file: %x\n", ch, state_ret);
+			if (state_ret & HA_STATE_SAVING) {
+				ERROR("XXH: saving! ret=%d returned!\n", state_ret);
+				usleep(20000);
+			} else {
+				ERROR("XXH: save done! ret=0 returned! %lu\n", llgettimeofday());
+				break;
+			}
+		}
+	}
         ERROR("SUSPEND shinfo %08lx\n", info.shared_info_frame);
         print_stats(xch, dom, 0, &time_stats, &shadow_stats, 1);
 

@@ -1873,11 +1873,10 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         goto finish;
     }
 
+    /* XXH: the buffered checkpoint is made */
     fprintf(stderr, "XXH: Buffered checkpoint %lu\n", llgettimeofday());
 
-    /* XXH: ctx->complete == 1 so in loadpages no data is read,
-     * but if the batch is more than 1024, the code is wrong?
-     */
+    /* XXH: start to buffer a new checkpoint */
     if ( pagebuf_get(xch, ctx, &pagebuf, io_fd, dom) ) {
         PERROR("error when buffering batch, finishing");
         /*
