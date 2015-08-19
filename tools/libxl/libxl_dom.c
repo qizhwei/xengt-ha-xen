@@ -1737,15 +1737,11 @@ static void backup_next_checkpoint(libxl__egc *egc, libxl__ev_time *ev,
 
     STATE_AO_GC(dss->ao);
 
-    /*
-     * Time to checkpoint the guest again. We return 1 to libxc
-     * (xc_domain_save.c). in order to continue executing the infinite loop
-     * (suspend, checkpoint, resume) in xc_domain_save().
-     */
+    fprintf(stderr, "XXH: backup %s %lu\n", __func__, llgettimeofday());
     libxl__xc_domain_saverestore_async_callback_done(egc, &dss->shs, 1);
 }
 
-static void backup_checkpoint_dm_saved(libxl__egc *egc,
+/*static void backup_checkpoint_dm_saved(libxl__egc *egc,
                                       libxl__domain_suspend_state *dss, int rc)
 {
     STATE_AO_GC(dss->ao);
@@ -1762,6 +1758,33 @@ static void backup_checkpoint_dm_saved(libxl__egc *egc,
     if (rc)
         goto out;
 
+    fprintf(stderr, "XXH: backup %s %lu\n", __func__, llgettimeofday());
+    return;
+
+out:
+    libxl__xc_domain_saverestore_async_callback_done(egc, &dss->shs, 0);
+
+    return;
+}*/
+
+static void backup_checkpoint_dm_saved_fast_return(libxl__egc *egc,
+                                      libxl__domain_suspend_state *dss, int rc)
+{
+    STATE_AO_GC(dss->ao);
+
+    if (rc) {
+        LOG(ERROR, "Failed to save device model. Terminating backup..");
+        return;
+    }
+
+    rc = libxl__ev_time_register_rel(gc, &dss->checkpoint_timeout,
+                                     backup_next_checkpoint,
+                                     0);
+
+    if (rc)
+        goto out;
+
+    fprintf(stderr, "XXH: backup %s %lu\n", __func__, llgettimeofday());
     return;
 
 out:
@@ -1779,9 +1802,10 @@ static void libxl__domain_checkpoint_wrapper(void *data)
 
     /* This would go into tailbuf. */
     if (dss->hvm) {
-        libxl__domain_save_device_model(egc, dss, backup_checkpoint_dm_saved);
+	    //libxl__domain_save_device_model(egc, dss, backup_checkpoint_dm_saved);
+	    libxl__domain_save_device_model(egc, dss, backup_checkpoint_dm_saved_fast_return);
     } else {
-	LOG(ERROR, "Not support pv");
+	    LOG(ERROR, "Not support pv");
     }
 }
 

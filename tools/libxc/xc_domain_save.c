@@ -20,6 +20,7 @@
  * Copyright (c) 2003, K A Fraser.
  */
 
+#include <pthread.h>
 #include <inttypes.h>
 #include <time.h>
 #include <stdlib.h>
@@ -805,6 +806,36 @@ static int save_tsc_info(xc_interface *xch, uint32_t dom, int io_fd)
     return 0;
 }
 
+struct async_copy {
+	pthread_mutex_t mu;
+	pthread_cond_t cond;
+	int *last_iter;
+	int interval;
+	int work;
+	int stop;
+};
+
+static void *wait_interval(void *data)
+{
+	struct async_copy *p = data;
+
+	while (true) {
+		if (p->stop) {
+			break;
+		}
+		if (!p->work) {
+			usleep(10000);
+		}
+		else {
+			usleep(p->interval * 1000);
+			*(p->last_iter) = 1;
+			fprintf(stderr, "XXH: backup last iter set to 1 %lu\n", llgettimeofday());
+			p->work = 0;
+		}
+	}
+	pthread_exit(NULL);
+}
+
 int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iters,
                    uint32_t max_factor, uint32_t flags,
                    struct save_callbacks* callbacks, int hvm, int tv)
@@ -922,6 +953,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     unsigned int state_ret;
     char ha_state_buffer[16];
     int bkflag;
+    int async_copy_interval = 1000;//-1 to turn off
+    pthread_t async_copy_thread;
+    struct async_copy ac_data;
+    int last_iter_tmp;
 
     print_trace();
     DPRINTF("%s: starting save of domid %u", __func__, dom);
@@ -997,6 +1032,16 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 	    sprintf(vgt_ha_bitmap_file, "/sys/kernel/debug/vgt/vm%u/ha_gm_bitmap", dom);
 	    sprintf(vgt_ha_state_file, "/sys/kernel/debug/vgt/vm%u/ha_state", dom);
 	    sprintf(vgt_ha_vgt_state_file, "/sys/kernel/debug/vgt/vm%u/ha_vgt_info", dom);
+    }
+    if (backup && async_copy_interval > 0) {
+	    ac_data.last_iter = &last_iter_tmp;
+	    ac_data.interval = tv;
+	    ac_data.work = 0;
+	    ac_data.stop = 0;
+	    pthread_mutex_init(&ac_data.mu, NULL);
+	    pthread_cond_init(&ac_data.cond, NULL);
+	    pthread_create(&async_copy_thread, NULL, wait_interval, (void *)&ac_data);
+	    pthread_detach(async_copy_thread);
     }
 
     /* Domain is still running at this point */
@@ -1230,6 +1275,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         char reportbuf[80];
 	bool gm_bitmap_got = false;
 	int rct;
+	unsigned long time_stamp;
 	//int pos = 0, cnt = 0;
 	//unsigned long to_send_cnt = 0;
 
@@ -1239,6 +1285,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         xc_report_progress_start(xch, reportbuf, dinfo->p2m_size);
 
+	time_stamp = llgettimeofday();
         iter++;
         sent_this_iter = 0;
         skip_this_iter = 0;
@@ -1688,6 +1735,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         if ( live )
         {
+	    if (backup && async_copy_interval > 0 && ac_data.work)
+		    goto clean_shadow;
 	    // TODO XXH: clear the if condition here
 	    if ( (ha && iter > max_iters) ||
                  (!ha && !logdirty && ((iter > max_iters) ||
@@ -1771,8 +1820,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                     PERROR("Error when writing to state file (tsc)");
                     goto out;
                 }
-
-
             }
 
 clean_shadow:
@@ -1785,7 +1832,7 @@ clean_shadow:
             }
 
             sent_last_iter = sent_this_iter;
-            ERROR("XXH: this iter pages saved %u\n", sent_last_iter);
+            //ERROR("XXH: this iter pages saved %u\n", sent_last_iter);
 
 	    // XXH: do saving for every 2 seconds
 	    /*for (j = 0; j < dinfo->p2m_size; j++)
@@ -1796,6 +1843,22 @@ clean_shadow:
 
             print_stats(xch, dom, sent_this_iter, &time_stats, &shadow_stats, 0);
 
+	    if (backup && async_copy_interval > 0 && ac_data.work) {
+		    if (last_iter_tmp) {
+			    ERROR("XXH: backup goto last iter %lu\n", llgettimeofday());
+			    rc = 0;
+			    goto backup_last_iter;
+		    } else {
+			    unsigned long time_used = llgettimeofday() - time_stamp;
+			    long time_sleep = async_copy_interval * 1000 - time_used;
+			    if (time_sleep > 0) {
+				    usleep(time_sleep);
+			    } else {
+				    ERROR("XXH: backup save takes too long! %ld %lu\n", time_sleep, llgettimeofday());
+			    }
+			    continue;
+		    }
+	    }
 	    if (last_iter && ha && !just_set)
 		    break;
 	    if (last_iter && ha && just_set)
@@ -2463,12 +2526,22 @@ clean_shadow:
 	    int cp_ret;
 	    /* XXH: now last part dm state will be sent */
 	    ERROR("XXH: backup callback->checkpoint start %lu\n", llgettimeofday());
+	    if (async_copy_interval > 0) {
+		    cp_ret = callbacks->checkpoint(callbacks->data);
+		    outbuf_flush(xch, ob, io_fd);
+		    ERROR("XXH: backup callback->checkpoint async end %d %lu\n", cp_ret, llgettimeofday());
+		    /* XXH: start timer & go to copypage */
+		    last_iter = last_iter_tmp = 0;
+		    ac_data.work = 1;
+		    goto copypages;
+	    }
 	    cp_ret = callbacks->checkpoint(callbacks->data);
 	    outbuf_flush(xch, ob, io_fd);
-	    ERROR("XXH: backup callback->checkpoint end %d %lu\n", cp_ret, llgettimeofday());
+	    ERROR("XXH: backup callback->checkpoint sync end %d %lu\n", cp_ret, llgettimeofday());
 	    /* XXH: A checkpoint is sent now */
-	    bkflag = 1;
     }
+backup_last_iter:
+    bkflag = 1;
     /* checkpoint_cb can spend arbitrarily long in between rounds */
     if ((backup && bkflag) ||
         (!backup && !rc && callbacks->checkpoint && callbacks->checkpoint(callbacks->data) > 0))
@@ -2478,6 +2551,7 @@ clean_shadow:
 
 	ERROR("XXH: backup suspend start %lu\n", llgettimeofday());
         last_iter = 1;
+	ha_iter++;
         if ( suspend_and_state(callbacks->suspend, callbacks->data, xch,
                                io_fd, dom, &info) )
         {
@@ -2567,6 +2641,12 @@ out_final:
     outbuf_free(&ob_pagebuf);
 
     errno = rc;
+    if (backup && async_copy_interval > 0) {
+	    ac_data.stop = 1;
+	    pthread_mutex_destroy(&ac_data.mu);
+	    pthread_cond_destroy(&ac_data.cond);
+	    pthread_exit(NULL);
+    }
 exit:
     ERROR("Save exit of domid %u with errno=%d\n", dom, errno);
 
