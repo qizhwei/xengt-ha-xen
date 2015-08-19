@@ -2413,6 +2413,7 @@ clean_shadow:
     }
     if ( !rc && callbacks->postcopy && !ha && backup && !backup_stop)
         callbacks->postcopy(callbacks->data);
+    fprintf(stderr, "XXH: domain %d resumed %lu\n", dom, llgettimeofday());
 
     /* guest has been resumed. Now we can compress data
      * at our own pace.
@@ -2456,6 +2457,7 @@ clean_shadow:
     if (backup) {
 	    int cp_ret;
 	    /* XXH: now last part dm state will be sent */
+	    ERROR("XXH: backup callback->checkpoint start %lu\n", llgettimeofday());
 	    cp_ret = callbacks->checkpoint(callbacks->data);
 	    outbuf_flush(xch, ob, io_fd);
 	    ERROR("XXH: backup callback->checkpoint end %d %lu\n", cp_ret, llgettimeofday());

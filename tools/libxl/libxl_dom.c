@@ -1742,7 +1742,6 @@ static void backup_next_checkpoint(libxl__egc *egc, libxl__ev_time *ev,
      * (xc_domain_save.c). in order to continue executing the infinite loop
      * (suspend, checkpoint, resume) in xc_domain_save().
      */
-    fprintf(stderr, "XXH: %s\n", __func__);
     libxl__xc_domain_saverestore_async_callback_done(egc, &dss->shs, 1);
 }
 
