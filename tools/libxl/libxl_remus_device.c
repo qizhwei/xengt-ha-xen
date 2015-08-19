@@ -307,6 +307,7 @@ void libxl__remus_devices_##api(libxl__egc *egc,                        \
     libxl__multidev_prepared(egc, &rds->multidev, 0);                   \
 }
 
+/* XXH: hidden remus function defined here */
 define_remus_checkpoint_api(postsuspend);
 
 define_remus_checkpoint_api(preresume);

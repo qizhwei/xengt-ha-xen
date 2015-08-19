@@ -263,6 +263,7 @@
 #define XC_SAVE_ID_HVM_IOREQ_SERVER_PFN -19
 #define XC_SAVE_ID_HVM_NR_IOREQ_SERVER_PAGES -20
 #define XC_SAVE_ID_VGT_STATE          -21 /* Additional VGT state */
+#define XC_SAVE_ID_BACKUP_HEARTBEAT   -22
 
 /*
 ** We process save/restore/migrate in batches of pages; the below

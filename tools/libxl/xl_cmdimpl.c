@@ -4104,7 +4104,7 @@ static void migrate_receive(int debug, int daemonize, int monitor,
 
     domid = rc;
 
-    if (remus || backup) {
+    if (remus/* || backup*/) {
         /* If we are here, it means that the sender (primary) has crashed.
          * TODO: Split-Brain Check.
          */
